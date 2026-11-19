@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b3b75">
+  <meta name="description" content="HOLCIM Management Dashboard — Employee records, analytics, and activity tracking.">
+
+  <!-- PWA Manifest & Icons -->
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+
+  <!-- iOS Safari Standalone App Metadata -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="HOLCIM EGYPT">
+  <link rel="apple-touch-icon" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="./icons/icon-512.png">
+
+  <title>HOLCIM Management Dashboard</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://www.gstatic.com/charts/loader.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- DESKTOP SIDEBAR (Hidden on Mobile, replaced by Bottom Nav) -->
+    <aside class="sidebar" aria-label="Main Navigation">
+      <div class="brand">
+        <img src="./icons/icon-192.png" alt="Logo" class="brand-logo">
+        <div>
+          <div class="brand-title">HOLCIM EGYPT</div>
+          <div class="brand-sub">Management Dashboard</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-btn active" data-tab="overview" onclick="switchTab('overview')">📊 Overview</button>
+        <button class="nav-btn" data-tab="employees" onclick="switchTab('employees')">👥 Employees</button>
+        <button class="nav-btn" data-tab="analytics" onclick="switchTab('analytics')">📈 Analytics</button>
+        <button class="nav-btn" data-tab="activity" onclick="switchTab('activity')">🕒 Activity Log</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="installBtnDesktop" class="btn-install hidden" onclick="triggerInstallPrompt()">📲 Install App</button>
+        <button class="btn-outline-light" onclick="refreshAll(true)">↻ Refresh Live Data</button>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT AREA -->
+    <div class="main-wrapper">
+      <!-- TOP APP HEADER (Safe-Area Top Aware) -->
+      <header class="app-header">
+        <div class="header-left">
+          <h1 id="headerTitle">Dashboard Overview</h1>
+          <span id="connectionPill" class="status-pill online">● Live Sheets Sync</span>
+        </div>
+        <div class="header-actions">
+          <button id="installBtnMobile" class="btn-install-sm hidden" onclick="triggerInstallPrompt()">📲 Install</button>
+          <button class="btn-icon" aria-label="Refresh" onclick="refreshAll(true)">↻</button>
+          <button class="btn-primary" onclick="openEmployeeModal()">+ Add</button>
+        </div>
+      </header>
+
+      <!-- iOS SAFARI INSTALL BANNER (Shown only on iOS Safari when not standalone) -->
+      <div id="iosInstallBanner" class="ios-banner hidden" role="region" aria-label="Install on iOS">
+        <div class="ios-banner-text">
+          <strong>Install HOLCIM App:</strong> Tap <span>Share ⍗</span> in Safari, then choose <strong>"Add to Home Screen"</strong>.
+        </div>
+        <button class="ios-close" onclick="dismissIosBanner()" aria-label="Dismiss">✕</button>
+      </div>
+
+      <!-- UPDATE AVAILABLE BANNER -->
+      <div id="swUpdateBanner" class="update-banner hidden">
+        <span>A newer app version is ready.</span>
+        <button onclick="applySwUpdate()">Update Now</button>
+      </div>
+
+      <!-- LOADING & ERROR TOAST -->
+      <div id="loadingBar" class="loading-bar hidden"><div class="loading-progress"></div></div>
+      <div id="alertBanner" class="alert-banner hidden"></div>
+
+      <!-- GLOBAL DEPARTMENT / DIVISION FILTER BAR -->
+      <section class="filter-strip">
+        <select id="deptFilter" aria-label="Filter by Department" onchange="handleFilterChange()">
+          <option value="ALL">All Departments &amp; Divisions</option>
+        </select>
+      </section>
+
+      <!-- TAB 1: OVERVIEW (KPIs + Summary Charts) -->
+      <main id="tab-overview" class="tab-panel">
+        <section class="kpi-grid">
+          <article class="kpi-card">
+            <span class="kpi-label">Total Employees</span>
+            <strong id="kpiTotalEmp" class="kpi-value">—</strong>
+            <span id="kpiActiveEmp" class="kpi-sub">Active staff</span>
+          </article>
+          <article class="kpi-card">
+            <span class="kpi-label">Departments</span>
+            <strong id="kpiTotalDepts" class="kpi-value">—</strong>
+            <span class="kpi-sub">Active divisions</span>
+          </article>
+          <article class="kpi-card">
+            <span class="kpi-label">Monthly Payroll</span>
+            <strong id="kpiPayroll" class="kpi-value">—</strong>
+            <span class="kpi-sub">Gross monthly total</span>
+          </article>
+          <article class="kpi-card">
+            <span class="kpi-label">Avg KPI Score</span>
+            <strong id="kpiAvgScore" class="kpi-value">—</strong>
+            <span class="kpi-sub">Performance index</span>
+          </article>
+        </section>
+
+        <section class="charts-grid">
+          <div class="card">
+            <h2>Headcount by Department</h2>
+            <div id="chartDeptHeadcount" class="chart-container"></div>
+          </div>
+          <div class="card">
+            <h2>Workforce Status Breakdown</h2>
+            <div id="chartStatusPie" class="chart-container"></div>
+          </div>
+        </section>
+      </main>
+
+      <!-- TAB 2: EMPLOYEES (Search, Sort, Pagination, Responsive Cards/Table, CRUD) -->
+      <main id="tab-employees" class="tab-panel hidden">
+        <div class="card">
+          <div class="toolbar-mobile">
+            <input type="search" id="searchInput" placeholder="Search name, ID, or role..." oninput="debouncedSearch()">
+            <div class="sort-row">
+              <select id="sortField" onchange="loadEmployeesPage(1)">
+                <option value="full_name">Sort: Name</option>
+                <option value="monthly_salary">Sort: Salary</option>
+                <option value="performance_score">Sort: KPI Score</option>
+                <option value="hire_date">Sort: Hire Date</option>
+              </select>
+              <select id="sortDir" onchange="loadEmployeesPage(1)">
+                <option value="asc">Asc ↑</option>
+                <option value="desc">Desc ↓</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Desktop Table / Mobile Card List -->
+          <div class="table-responsive">
+            <table class="emp-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Employee</th>
+                  <th>Role</th>
+                  <th>Department</th>
+                  <th>Salary</th>
+                  <th>KPI</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="employeeListBody">
+                <tr><td colspan="8" class="empty-cell">Loading employees...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Touch-Friendly Pagination -->
+          <div class="pagination-bar">
+            <button id="prevPageBtn" class="btn-page" onclick="changePage(-1)">← Prev</button>
+            <span id="pageIndicator" class="page-info">Page 1 of 1</span>
+            <button id="nextPageBtn" class="btn-page" onclick="changePage(1)">Next →</button>
+          </div>
+        </div>
+      </main>
+
+      <!-- TAB 3: ANALYTICS -->
+      <main id="tab-analytics" class="tab-panel hidden">
+        <div class="charts-grid">
+          <div class="card">
+            <h2>Department Budget vs. Payroll Allocation</h2>
+            <div id="chartBudgetCompare" class="chart-container"></div>
+          </div>
+          <div class="card">
+            <h2>Average Performance Score by Division</h2>
+            <div id="chartPerfCompare" class="chart-container"></div>
+          </div>
+        </div>
+      </main>
+
+      <!-- TAB 4: RECENT ACTIVITY LOGS -->
+      <main id="tab-activity" class="tab-panel hidden">
+        <div class="card">
+          <h2>Recent Audit &amp; Activity Log</h2>
+          <ul id="activityFeed" class="activity-list">
+            <li class="empty-cell">Loading activity logs...</li>
+          </ul>
+        </div>
+      </main>
+    </div>
+
+    <!-- MOBILE BOTTOM NAVIGATION BAR (Safe-Area Bottom Aware) -->
+    <nav class="bottom-nav" aria-label="Mobile Navigation">
+      <button class="bottom-btn active" data-tab="overview" onclick="switchTab('overview')">
+        <span class="b-icon">📊</span>
+        <span class="b-label">Overview</span>
+      </button>
+      <button class="bottom-btn" data-tab="employees" onclick="switchTab('employees')">
+        <span class="b-icon">👥</span>
+        <span class="b-label">Employees</span>
+      </button>
+      <button class="bottom-btn" data-tab="analytics" onclick="switchTab('analytics')">
+        <span class="b-icon">📈</span>
+        <span class="b-label">Analytics</span>
+      </button>
+      <button class="bottom-btn" data-tab="activity" onclick="switchTab('activity')">
+        <span class="b-icon">🕒</span>
+        <span class="b-label">Activity</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- ADD / EDIT EMPLOYEE MODAL (Mobile Bottom-Sheet on Phones, Centered on Desktop) -->
+  <div id="employeeModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h3 id="modalTitle">Add Employee</h3>
+        <button class="btn-close" onclick="closeEmployeeModal()" aria-label="Close">✕</button>
+      </div>
+      <form id="employeeForm" onsubmit="handleSaveEmployee(event)">
+        <input type="hidden" id="formEmpId">
+
+        <label for="formFullName">Full Name</label>
+        <input type="text" id="formFullName" required placeholder="e.g., Omar Khaled">
+
+        <label for="formRole">Job Title / Role</label>
+        <input type="text" id="formRole" required placeholder="e.g., Process Engineer">
+
+        <label for="formDeptId">Department / Division</label>
+        <select id="formDeptId" required></select>
+
+        <div class="form-grid-2">
+          <div>
+            <label for="formSalary">Monthly Salary</label>
+            <input type="number" id="formSalary" required min="0" step="100">
+          </div>
+          <div>
+            <label for="formScore">KPI Score (1–5)</label>
+            <input type="number" id="formScore" required min="1" max="5" step="0.1" value="4.5">
+          </div>
+        </div>
+
+        <label for="formStatus">Employment Status</label>
+        <select id="formStatus">
+          <option value="Active">Active</option>
+          <option value="On Leave">On Leave</option>
+          <option value="Inactive">Inactive</option>
+        </select>
+
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeEmployeeModal()">Cancel</button>
+          <button type="submit" id="saveEmpBtn" class="btn-primary">Save Record</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
