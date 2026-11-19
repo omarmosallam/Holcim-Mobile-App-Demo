@@ -6,8 +6,8 @@ const STATIC_ASSETS = [
   './app.js',
   './manifest.json',
   './offline.html',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/icon.png',
+  './icons/icon.png'
 ];
 
 // 1. Install: Pre-cache static shell assets ONLY
