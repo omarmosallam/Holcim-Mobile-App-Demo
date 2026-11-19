@@ -1,468 +1,622 @@
 /**
- * Replace this URL with your deployed Google Apps Script Web App (/exec) URL.
- * If opened inside script.google.com directly, google.script.run is used automatically.
+ * Holcim Egypt Management & KPI Dashboard — External PWA Client (app.js)
+ * Connects to Google Apps Script Web App (/exec) via JSON POST bridge.
  */
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
+
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec'; // Replace with https://script.google.com/macros/s/.../exec
+const PAGE_SIZE = 10;
 
 const state = {
-  currentTab: 'overview',
-  deptId: 'ALL',
-  page: 1,
-  pageSize: 10,
-  totalPages: 1,
-  search: '',
-  sortBy: 'full_name',
-  sortDir: 'asc',
-  employeesCache: [],
-  departments: [],
-  dashboardData: null,
-  inFlightRequests: new Set(),
-  deferredInstallPrompt: null,
-  waitingWorker: null
+  activeTab: 'overview',
+  unitId: 'ALL',
+  empPage: 1,
+  empSearch: '',
+  empSortBy: 'full_name',
+  empSortDir: 'asc',
+  dashboardCache: new Map(), // key: unitId -> dashboard response object
+  empListCache: null,       // array of all employees for fast instant search/sort/page
+  empListVersion: null,     // tracks dbVersion from dashboard response
+  activityCache: null,      // cached recent activity rows
+  activityVersion: null,
+  inFlight: new Set()
 };
 
-/* ============================================================================
- * 1. GOOGLE APPS SCRIPT DUAL BRIDGE (Preserves All Backend Signatures)
- * ========================================================================== */
-function callGas(action, payload = {}) {
-  const requestKey = `${action}:${JSON.stringify(payload)}`;
-  if (state.inFlightRequests.has(requestKey)) {
-    return Promise.reject(new Error('DUPLICATE_REQUEST'));
+// -------------------- API Bridge (`doPost`) --------------------
+
+async function callGasApi(action, payload = {}) {
+  if (!GAS_WEB_APP_URL || GAS_WEB_APP_URL.includes('YOUR_GAS_WEB_APP_EXEC_URL')) {
+    throw new Error('Please set GAS_WEB_APP_URL in app.js to your deployed /exec URL.');
   }
 
-  state.inFlightRequests.add(requestKey);
-  setLoading(true);
-
-  const cleanup = () => {
-    state.inFlightRequests.delete(requestKey);
-    if (state.inFlightRequests.size === 0) setLoading(false);
-  };
-
-  // Mode A: Running inside Google Apps Script HtmlService
-  if (typeof google !== 'undefined' && google.script && google.script.run) {
-    return new Promise((resolve, reject) => {
-      const runner = google.script.run
-        .withSuccessHandler((res) => { cleanup(); resolve(res); })
-        .withFailureHandler((err) => { cleanup(); reject(err); });
-
-      switch (action) {
-        case 'getDashboardData': runner.getDashboardData(payload.unitId || 'ALL'); break;
-        case 'getAllEmployees': runner.getAllEmployees(); break;
-        case 'searchEmployeesPage': runner.searchEmployeesPage(payload); break;
-        case 'addEmployee': runner.addEmployee(payload); break;
-        case 'updateEmployee': runner.updateEmployee(payload); break;
-        case 'deleteEmployee': runner.deleteEmployee(payload.empId || payload); break;
-        case 'getRecentActivity': runner.getRecentActivity(); break;
-        default: cleanup(); reject(new Error('Unknown GAS method: ' + action));
-      }
-    });
-  }
-
-  // Mode B: Running as an Installed HTTPS PWA calling GAS doPost()
-  return fetch(GAS_WEB_APP_URL, {
+  const res = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // Avoids CORS preflight OPTIONS on GAS
-    body: JSON.stringify({ action, payload })
-  })
-    .then((res) => {
-      if (!res.ok) throw new Error('Network response error: ' + res.status);
-      return res.json();
-    })
-    .then((json) => {
-      cleanup();
-      if (!json.ok) throw new Error(json.error || 'Apps Script error');
-      return json.data;
-    })
-    .catch((err) => {
-      cleanup();
-      throw err;
-    });
-}
-
-/* ============================================================================
- * 2. SERVICE WORKER & ANDROID / iOS INSTALLATION EXPERIENCE
- * ========================================================================== */
-function initPwa() {
-  // Register Service Worker only on compatible HTTPS/localhost origins
-  if ('serviceWorker' in navigator && !window.location.hostname.includes('googleusercontent.com')) {
-    navigator.serviceWorker.register('./service-worker.js').then((reg) => {
-      reg.addEventListener('updatefound', () => {
-        const newWorker = reg.installing;
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            state.waitingWorker = newWorker;
-            document.getElementById('swUpdateBanner').classList.remove('hidden');
-          }
-        });
-      });
-    }).catch((err) => console.warn('SW registration skipped:', err));
-  }
-
-  // Detect Standalone Mode (already installed)
-  const isStandalone =
-    window.matchMedia('(display-mode: standalone)').matches ||
-    window.navigator.standalone === true;
-
-  if (isStandalone) return;
-
-  // Android / Desktop Chrome Install Prompt
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    state.deferredInstallPrompt = e;
-    if (!localStorage.getItem('pwa_install_dismissed')) {
-      document.getElementById('installBtnDesktop')?.classList.remove('hidden');
-      document.getElementById('installBtnMobile')?.classList.remove('hidden');
-    }
+    // text/plain avoids CORS preflight issues with Google Apps Script Web Apps
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, payload }),
+    redirect: 'follow'
   });
 
-  window.addEventListener('appinstalled', () => {
-    state.deferredInstallPrompt = null;
-    document.getElementById('installBtnDesktop')?.classList.add('hidden');
-    document.getElementById('installBtnMobile')?.classList.add('hidden');
-  });
-
-  // iOS Safari Add-to-Home-Screen Detection
-  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const isSafari = /safari/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
-  if (isIos && isSafari && !localStorage.getItem('ios_a2hs_dismissed')) {
-    document.getElementById('iosInstallBanner').classList.remove('hidden');
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} while contacting Google Apps Script.`);
   }
+
+  const json = await res.json();
+  if (!json || json.ok === false) {
+    throw new Error((json && json.error) || `Action failed: ${action}`);
+  }
+  return json.data;
 }
 
-async function triggerInstallPrompt() {
-  if (!state.deferredInstallPrompt) return;
-  state.deferredInstallPrompt.prompt();
-  const { outcome } = await state.deferredInstallPrompt.userChoice;
-  if (outcome === 'dismissed') {
-    localStorage.setItem('pwa_install_dismissed', '1');
+// -------------------- UI Helpers --------------------
+
+function showToast(message, isError = false) {
+  let toast = document.getElementById('holcimToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'holcimToast';
+    toast.style.cssText = [
+      'position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:9999;',
+      'padding:10px 16px;border-radius:10px;font-size:13px;font-weight:500;',
+      'box-shadow:0 8px 24px rgba(15,23,42,0.22);transition:opacity 0.2s ease;max-width:90vw;'
+    ].join('');
+    document.body.appendChild(toast);
   }
-  state.deferredInstallPrompt = null;
-  document.getElementById('installBtnDesktop')?.classList.add('hidden');
-  document.getElementById('installBtnMobile')?.classList.add('hidden');
+  toast.textContent = message;
+  toast.style.background = isError ? '#dc2626' : '#0f172a';
+  toast.style.color = '#ffffff';
+  toast.style.opacity = '1';
+
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => {
+    toast.style.opacity = '0';
+  }, 3000);
 }
 
-function dismissIosBanner() {
-  localStorage.setItem('ios_a2hs_dismissed', '1');
-  document.getElementById('iosInstallBanner').classList.add('hidden');
-}
-
-function applySwUpdate() {
-  if (state.waitingWorker) {
-    state.waitingWorker.postMessage({ type: 'SKIP_WAITING' });
-    window.location.reload();
+function showErrorBanner(message) {
+  let banner = document.getElementById('errorBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'errorBanner';
+    banner.style.cssText = [
+      'background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;',
+      'padding:10px 14px;border-radius:10px;margin:10px 0;font-size:13px;display:none;'
+    ].join('');
+    const main = document.querySelector('main') || document.body;
+    main.prepend(banner);
   }
-}
-
-/* ============================================================================
- * 3. NAVIGATION, CHARTS & DATA RENDERING
- * ========================================================================== */
-const TAB_TITLES = {
-  overview: 'Dashboard Overview',
-  employees: 'Employee Directory',
-  analytics: 'Workforce Analytics',
-  activity: 'Activity Log'
-};
-
-function switchTab(tab) {
-  state.currentTab = tab;
-  document.getElementById('headerTitle').textContent = TAB_TITLES[tab] || 'Dashboard';
-
-  document.querySelectorAll('.tab-panel').forEach((el) => el.classList.add('hidden'));
-  document.getElementById('tab-' + tab).classList.remove('hidden');
-
-  document.querySelectorAll('.nav-btn, .bottom-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.tab === tab);
-  });
-
-  if (tab === 'employees' && state.employeesCache.length === 0) {
-    loadEmployeesPage(1);
-  } else if (tab === 'activity') {
-    loadActivityLog();
-  } else if ((tab === 'overview' || tab === 'analytics') && state.dashboardData) {
-    renderCharts(state.dashboardData);
+  if (!message) {
+    banner.style.display = 'none';
+    banner.textContent = '';
+    return;
   }
+  banner.textContent = message;
+  banner.style.display = 'block';
 }
 
 function setLoading(isLoading) {
-  document.getElementById('loadingBar').classList.toggle('hidden', !isLoading);
-}
-
-function showError(msg) {
-  if (msg === 'DUPLICATE_REQUEST') return;
-  const banner = document.getElementById('alertBanner');
-  banner.textContent = msg;
-  banner.classList.remove('hidden');
-  setTimeout(() => banner.classList.add('hidden'), 6000);
-}
-
-function handleFilterChange() {
-  state.deptId = document.getElementById('deptFilter').value;
-  refreshAll(false);
-}
-
-async function refreshAll(forceRefresh) {
-  try {
-    const dash = await callGas('getDashboardData', { unitId: state.deptId, force: forceRefresh });
-    state.dashboardData = dash;
-    populateDepartments(dash.units || dash.departments || []);
-    renderKpis(dash.kpis || {});
-    renderCharts(dash);
-
-    if (state.currentTab === 'employees') await loadEmployeesPage(state.page);
-    if (state.currentTab === 'activity') await loadActivityLog();
-  } catch (err) {
-    showError(err.message || 'Unable to reach Google Sheets backend.');
+  const loader = document.getElementById('loadingIndicator');
+  if (loader) {
+    loader.style.display = isLoading ? 'inline-flex' : 'none';
   }
+  document.querySelectorAll('[data-refresh-btn]').forEach(btn => {
+    btn.disabled = isLoading;
+  });
 }
 
-function populateDepartments(depts) {
-  if (!depts.length) return;
-  state.departments = depts;
-  const filterSel = document.getElementById('deptFilter');
-  const formSel = document.getElementById('formDeptId');
-  const prevVal = filterSel.value;
+function formatNumber(n) {
+  return Number(n || 0).toLocaleString('en-US');
+}
 
-  filterSel.innerHTML = '<option value="ALL">All Departments &amp; Divisions</option>';
-  formSel.innerHTML = '';
+function formatCompactEgp(n) {
+  const num = Number(n || 0);
+  if (Math.abs(num) >= 1e9) return `EGP ${(num / 1e9).toFixed(2)}B`;
+  if (Math.abs(num) >= 1e6) return `EGP ${(num / 1e6).toFixed(1)}M`;
+  return `EGP ${formatNumber(num)}`;
+}
 
-  depts.forEach((d) => {
-    const id = d.unit_id || d.dept_id;
-    const name = d.unit_name || d.dept_name;
-    filterSel.insertAdjacentHTML('beforeend', `<option value="${id}">${name}</option>`);
-    formSel.insertAdjacentHTML('beforeend', `<option value="${id}">${name}</option>`);
+function invalidateClientCaches() {
+  state.dashboardCache.clear();
+  state.empListCache = null;
+  state.empListVersion = null;
+  state.activityCache = null;
+  state.activityVersion = null;
+}
+
+// -------------------- Navigation & Filter Events --------------------
+
+function switchTab(tabName) {
+  state.activeTab = tabName || 'overview';
+
+  document.querySelectorAll('[data-tab-section]').forEach(el => {
+    el.style.display = el.getAttribute('data-tab-section') === state.activeTab ? '' : 'none';
   });
 
-  if (prevVal) filterSel.value = prevVal;
+  document.querySelectorAll('[data-nav-tab]').forEach(btn => {
+    const isActive = btn.getAttribute('data-nav-tab') === state.activeTab;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-current', isActive ? 'page' : 'false');
+  });
+
+  if (state.activeTab === 'employees') {
+    loadEmployeesPage(state.empPage);
+  } else if (state.activeTab === 'activity') {
+    loadRecentActivity();
+  }
 }
 
-function renderKpis(k) {
-  document.getElementById('kpiTotalEmp').textContent = k.headcount ?? k.totalHeadcount ?? '0';
-  document.getElementById('kpiActiveEmp').textContent = `${k.activeEmployees ?? k.headcount ?? 0} active staff`;
-  document.getElementById('kpiTotalDepts').textContent = state.departments.length || '—';
-  const payroll = Number(k.monthlyPayrollEgp ?? k.monthlyPayroll ?? 0);
-  document.getElementById('kpiPayroll').textContent = payroll ? payroll.toLocaleString() : '0';
-  document.getElementById('kpiAvgScore').textContent = `${k.avgPerformance ?? '0.0'} / 5.0`;
+function populateUnitSelects(units, selectedUnitId) {
+  const selects = document.querySelectorAll('#unitFilter, #deptFilter, [data-unit-select]');
+  selects.forEach(select => {
+    const isFilter = select.id === 'unitFilter' || select.id === 'deptFilter';
+    const currentVal = isFilter ? selectedUnitId : (select.value || (units[0] && units[0].unit_id) || '');
+    select.innerHTML = '';
+
+    if (isFilter) {
+      const allOpt = document.createElement('option');
+      allOpt.value = 'ALL';
+      allOpt.textContent = 'All Departments & Divisions';
+      select.appendChild(allOpt);
+    }
+
+    (units || []).forEach(u => {
+      const opt = document.createElement('option');
+      opt.value = u.unit_id;
+      opt.textContent = u.unit_name;
+      select.appendChild(opt);
+    });
+
+    if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
+      select.value = currentVal;
+    }
+  });
 }
 
-function renderCharts(dash) {
-  if (typeof google === 'undefined' || !google.visualization || !dash.charts) return;
+// -------------------- Dashboard Rendering & Caching --------------------
 
-  const isMobile = window.innerWidth < 640;
-  const commonOpts = {
-    legend: { position: isMobile ? 'bottom' : 'top', textStyle: { fontSize: 11 } },
-    chartArea: { width: isMobile ? '84%' : '78%', height: '68%' },
-    colors: ['#0b3b75', '#38bdf8', '#16a34a', '#f59e0b']
+function applyDashboardData(data, selectedUnit) {
+  showErrorBanner('');
+
+  // If dbVersion changed on backend, clear stale employee/activity caches
+  if (data.dbVersion && data.dbVersion !== state.empListVersion) {
+    state.empListCache = null;
+    state.empListVersion = data.dbVersion;
+  }
+  if (data.dbVersion && data.dbVersion !== state.activityVersion) {
+    state.activityCache = null;
+    state.activityVersion = data.dbVersion;
+  }
+
+  const sheetLink = document.getElementById('openSheetLink');
+  if (sheetLink && data.sheetUrl) {
+    sheetLink.href = data.sheetUrl;
+  }
+
+  populateUnitSelects(data.units, selectedUnit);
+  renderKpis(data.kpis);
+  renderCharts(data.charts);
+  renderSummaryTables(data);
+}
+
+function renderKpis(kpis = {}) {
+  const map = {
+    kpiTotalEmployees: formatNumber(kpis.headcount),
+    kpiDepartments: formatNumber(5),
+    kpiMonthlyPayroll: formatNumber(kpis.monthlyPayrollEgp),
+    kpiAvgScore: `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`,
+    kpiDispatchedTons: `${formatNumber(kpis.totalDispatchedTons)} t`,
+    kpiRevenueEgp: formatCompactEgp(kpis.totalRevenueEgp),
+    kpiCo2Intensity: `${formatNumber(kpis.avgCo2)} kg/t`,
+    kpiCapexProgress: `${formatNumber(kpis.avgProjectProgress)}%`
   };
 
-  if (dash.charts.capexByUnitChart && document.getElementById('chartDeptHeadcount')) {
-    const d1 = google.visualization.arrayToDataTable(dash.charts.capexByUnitChart);
-    new google.visualization.ColumnChart(document.getElementById('chartDeptHeadcount')).draw(d1, commonOpts);
-  }
+  Object.entries(map).forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  });
+}
 
-  if (dash.charts.projectStatusChart && document.getElementById('chartStatusPie')) {
-    const d2 = google.visualization.arrayToDataTable(dash.charts.projectStatusChart);
-    new google.visualization.PieChart(document.getElementById('chartStatusPie')).draw(d2, {
-      ...commonOpts,
-      pieHole: 0.45
-    });
-  }
+function renderCharts(charts = {}) {
+  // Lightweight canvas bar chart renderer if a #headcountChart canvas exists
+  const canvas = document.getElementById('headcountChart');
+  if (!canvas || !canvas.getContext) return;
+  const rows = (charts.capexByUnitChart || []).slice(1);
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
 
-  if (dash.charts.monthlyTrendChart && document.getElementById('chartBudgetCompare')) {
-    const d3 = google.visualization.arrayToDataTable(dash.charts.monthlyTrendChart);
-    new google.visualization.ColumnChart(document.getElementById('chartBudgetCompare')).draw(d3, commonOpts);
-  }
+  if (!rows.length) return;
+  const maxVal = Math.max(1, ...rows.flatMap(r => [Number(r[1] || 0), Number(r[2] || 0)]));
+  const groupW = w / rows.length;
+  const barW = Math.min(22, groupW * 0.28);
 
-  if (dash.charts.co2TrendChart && document.getElementById('chartPerfCompare')) {
-    const d4 = google.visualization.arrayToDataTable(dash.charts.co2TrendChart);
-    new google.visualization.LineChart(document.getElementById('chartPerfCompare')).draw(d4, {
-      ...commonOpts,
-      pointSize: 5
-    });
+  rows.forEach((r, idx) => {
+    const xBase = idx * groupW + groupW * 0.2;
+    const allocH = (Number(r[1] || 0) / maxVal) * (h - 36);
+    const spentH = (Number(r[2] || 0) / maxVal) * (h - 36);
+
+    ctx.fillStyle = '#0f294a';
+    ctx.fillRect(xBase, h - 22 - allocH, barW, allocH);
+
+    ctx.fillStyle = '#0ea5e9';
+    ctx.fillRect(xBase + barW + 4, h - 22 - spentH, barW, spentH);
+
+    ctx.fillStyle = '#475569';
+    ctx.font = '10px sans-serif';
+    const label = String(r[0] || '').split(' ')[0];
+    ctx.fillText(label, xBase, h - 8);
+  });
+}
+
+function renderSummaryTables(data) {
+  const projBody = document.getElementById('projectsTableBody');
+  if (projBody && data.tables && Array.isArray(data.tables.projects)) {
+    projBody.innerHTML = data.tables.projects.map(p => `
+      <tr>
+        <td>${p.proj_id}</td>
+        <td>${p.project_name}</td>
+        <td>${p.unit_name}</td>
+        <td>${p.completion_pct}%</td>
+        <td>${p.status}</td>
+      </tr>
+    `).join('');
   }
 }
 
-/* ============================================================================
- * 4. EMPLOYEE PAGINATION, SEARCH, SORT & CRUD
- * ========================================================================== */
-let searchTimer = null;
-function debouncedSearch() {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => loadEmployeesPage(1), 320);
-}
+async function loadDashboard(forceRefresh = false) {
+  const selectedUnit = state.unitId || 'ALL';
 
-async function loadEmployeesPage(page = 1) {
-  state.page = page;
-  state.search = document.getElementById('searchInput').value.trim();
-  state.sortBy = document.getElementById('sortField').value;
-  state.sortDir = document.getElementById('sortDir').value;
-
-  try {
-    const res = await callGas('searchEmployeesPage', {
-      page: state.page,
-      pageSize: state.pageSize,
-      search: state.search,
-      deptId: state.deptId,
-      sortBy: state.sortBy,
-      sortDir: state.sortDir
-    });
-
-    const rows = res.items || res.rows || res.employees || (Array.isArray(res) ? res : []);
-    state.employeesCache = rows;
-    state.totalPages = res.totalPages || Math.max(1, Math.ceil((res.total || rows.length) / state.pageSize));
-    renderEmployeeRows(rows);
-    updatePaginationUi();
-  } catch (err) {
-    showError(err.message);
-  }
-}
-
-function renderEmployeeRows(rows) {
-  const tbody = document.getElementById('employeeListBody');
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No matching employees found.</td></tr>';
+  // Instant render from client memory when no force refresh is requested
+  if (!forceRefresh && state.dashboardCache.has(selectedUnit)) {
+    applyDashboardData(state.dashboardCache.get(selectedUnit), selectedUnit);
+    if (state.activeTab === 'employees') {
+      loadEmployeesPage(state.empPage);
+    } else if (state.activeTab === 'activity') {
+      loadRecentActivity();
+    }
     return;
   }
 
-  tbody.innerHTML = rows.map((emp) => {
-    const id = emp.emp_id || emp.id;
-    const name = emp.full_name || emp.name;
-    const dept = emp.unit_name || emp.dept_name || emp.unit_id || emp.dept_id;
-    const salary = Number(emp.monthly_salary_egp || emp.monthly_salary || 0).toLocaleString();
-    const kpi = Number(emp.performance_score || 0).toFixed(1);
-    const status = emp.status || 'Active';
-    const badgeClass = status === 'Active' ? 'badge-active' : 'badge-leave';
+  const reqKey = `dash:${selectedUnit}`;
+  if (state.inFlight.has(reqKey)) return;
 
-    return `
-      <tr>
-        <td data-label="Employee ID"><strong>${id}</strong></td>
-        <td data-label="Full Name">${name}</td>
-        <td data-label="Role">${emp.role || ''}</td>
-        <td data-label="Department">${dept}</td>
-        <td data-label="Salary">${salary}</td>
-        <td data-label="KPI Score">${kpi} / 5.0</td>
-        <td data-label="Status"><span class="badge ${badgeClass}">${status}</span></td>
-        <td>
-          <button class="btn-sm-edit" onclick="editEmployee('${id}')">Edit</button>
-          <button class="btn-sm-del" onclick="confirmDeleteEmployee('${id}', '${name.replace(/'/g, "\\'")}')">Delete</button>
-        </td>
-      </tr>
-    `;
-  }).join('');
-}
+  state.inFlight.add(reqKey);
+  setLoading(true);
 
-function updatePaginationUi() {
-  document.getElementById('pageIndicator').textContent = `Page ${state.page} of ${state.totalPages}`;
-  document.getElementById('prevPageBtn').disabled = state.page <= 1;
-  document.getElementById('nextPageBtn').disabled = state.page >= state.totalPages;
-}
-
-function changePage(delta) {
-  const next = state.page + delta;
-  if (next >= 1 && next <= state.totalPages) {
-    loadEmployeesPage(next);
-  }
-}
-
-function openEmployeeModal(emp = null) {
-  document.getElementById('modalTitle').textContent = emp ? 'Update Employee' : 'Add Employee';
-  document.getElementById('formEmpId').value = emp ? (emp.emp_id || emp.id) : '';
-  document.getElementById('formFullName').value = emp ? (emp.full_name || emp.name) : '';
-  document.getElementById('formRole').value = emp ? emp.role : '';
-  document.getElementById('formDeptId').value = emp ? (emp.unit_id || emp.dept_id) : (state.departments[0]?.unit_id || '');
-  document.getElementById('formSalary').value = emp ? (emp.monthly_salary_egp || emp.monthly_salary) : '';
-  document.getElementById('formScore').value = emp ? emp.performance_score : '4.5';
-  document.getElementById('formStatus').value = emp ? emp.status : 'Active';
-  document.getElementById('employeeModal').classList.remove('hidden');
-}
-
-function closeEmployeeModal() {
-  document.getElementById('employeeModal').classList.add('hidden');
-}
-
-function editEmployee(empId) {
-  const emp = state.employeesCache.find((e) => (e.emp_id || e.id) === empId);
-  if (emp) openEmployeeModal(emp);
-}
-
-async function handleSaveEmployee(event) {
-  event.preventDefault();
-  const empId = document.getElementById('formEmpId').value;
-  const payload = {
-    emp_id: empId,
-    full_name: document.getElementById('formFullName').value.trim(),
-    role: document.getElementById('formRole').value.trim(),
-    unit_id: document.getElementById('formDeptId').value,
-    dept_id: document.getElementById('formDeptId').value,
-    monthly_salary_egp: Number(document.getElementById('formSalary').value),
-    monthly_salary: Number(document.getElementById('formSalary').value),
-    performance_score: Number(document.getElementById('formScore').value),
-    status: document.getElementById('formStatus').value
-  };
-
-  closeEmployeeModal();
   try {
-    await callGas(empId ? 'updateEmployee' : 'addEmployee', payload);
-    await refreshAll(true);
-  } catch (err) {
-    showError(err.message);
-  }
-}
+    const data = await callGasApi('getDashboardData', { unitId: selectedUnit });
+    state.dashboardCache.set(selectedUnit, data);
+    applyDashboardData(data, selectedUnit);
 
-async function confirmDeleteEmployee(empId, name) {
-  if (!confirm(`Remove ${name} (${empId}) from Google Sheets?`)) return;
-  try {
-    await callGas('deleteEmployee', { empId });
-    await refreshAll(true);
-  } catch (err) {
-    showError(err.message);
-  }
-}
-
-async function loadActivityLog() {
-  try {
-    const logs = await callGas('getRecentActivity');
-    const list = document.getElementById('activityFeed');
-    if (!logs || !logs.length) {
-      list.innerHTML = '<li class="empty-cell">No recent activity recorded.</li>';
-      return;
+    if (state.activeTab === 'employees') {
+      await loadEmployeesPage(state.empPage, forceRefresh);
+    } else if (state.activeTab === 'activity') {
+      await loadRecentActivity(forceRefresh);
     }
-    list.innerHTML = logs.map((item) => `
-      <li>
-        <strong>${item.action || item.event || 'Update'}</strong> — ${item.details || item.message || ''}
-        <span class="activity-time">${item.timestamp || item.date || ''}</span>
-      </li>
-    `).join('');
   } catch (err) {
-    showError(err.message);
+    showErrorBanner(err.message || String(err));
+    showToast(err.message || 'Failed to load dashboard', true);
+  } finally {
+    state.inFlight.delete(reqKey);
+    setLoading(false);
   }
 }
 
-/* ============================================================================
- * 5. INITIALIZATION & CONNECTIVITY LISTENERS
- * ========================================================================== */
-window.addEventListener('online', () => {
-  const pill = document.getElementById('connectionPill');
-  pill.textContent = '● Live Sheets Sync';
-  pill.className = 'status-pill online';
-  refreshAll(false);
-});
+// -------------------- Employees Search, Sort, Pagination & CRUD --------------------
 
-window.addEventListener('offline', () => {
-  const pill = document.getElementById('connectionPill');
-  pill.textContent = '● Offline (Live Data Paused)';
-  pill.className = 'status-pill offline';
-});
+function filterAndPaginateLocalEmployees(allEmployees) {
+  const search = String(state.empSearch || '').toLowerCase().trim();
+  const deptId = state.unitId || 'ALL';
+  const sortBy = state.empSortBy || 'full_name';
+  const sortDir = state.empSortDir === 'desc' ? -1 : 1;
 
-window.addEventListener('resize', () => {
-  if (state.dashboardData) renderCharts(state.dashboardData);
-});
+  let list = allEmployees.slice();
+
+  if (deptId && deptId !== 'ALL') {
+    list = list.filter(e => e.unit_id === deptId);
+  }
+  if (search) {
+    list = list.filter(e =>
+      String(e.emp_id || '').toLowerCase().includes(search) ||
+      String(e.full_name || '').toLowerCase().includes(search) ||
+      String(e.role || '').toLowerCase().includes(search) ||
+      String(e.unit_name || '').toLowerCase().includes(search)
+    );
+  }
+
+  list.sort((a, b) => {
+    const valA = a[sortBy];
+    const valB = b[sortBy];
+    if (typeof valA === 'number' && typeof valB === 'number') {
+      return (valA - valB) * sortDir;
+    }
+    return String(valA || '').localeCompare(String(valB || '')) * sortDir;
+  });
+
+  const total = list.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage = Math.min(Math.max(1, state.empPage), totalPages);
+  const start = (safePage - 1) * PAGE_SIZE;
+
+  return {
+    items: list.slice(start, start + PAGE_SIZE),
+    page: safePage,
+    pageSize: PAGE_SIZE,
+    total,
+    totalPages
+  };
+}
+
+function renderEmployeesPage(pageData) {
+  state.empPage = pageData.page;
+  const container = document.getElementById('employeesListContainer');
+  const pageInfo = document.getElementById('empPageInfo');
+  const prevBtn = document.getElementById('empPrevBtn');
+  const nextBtn = document.getElementById('empNextBtn');
+
+  if (pageInfo) {
+    pageInfo.textContent = `Page ${pageData.page} of ${pageData.totalPages} (${pageData.total})`;
+  }
+  if (prevBtn) prevBtn.disabled = pageData.page <= 1;
+  if (nextBtn) nextBtn.disabled = pageData.page >= pageData.totalPages;
+
+  if (!container) return;
+
+  if (!pageData.items.length) {
+    container.innerHTML = '<div class="empty-state">No matching employees found.</div>';
+    return;
+  }
+
+  container.innerHTML = pageData.items.map(emp => `
+    <div class="employee-card" data-emp-id="${emp.emp_id}">
+      <div class="emp-main">
+        <strong>${emp.full_name}</strong> <span class="emp-id">(${emp.emp_id})</span>
+        <div class="emp-role">${emp.role} • ${emp.unit_name}</div>
+      </div>
+      <div class="emp-meta">
+        <span>EGP ${formatNumber(emp.monthly_salary_egp)}/mo</span>
+        <span>KPI: ${Number(emp.performance_score || 0).toFixed(1)}</span>
+        <span>${emp.status || 'Active'}</span>
+      </div>
+      <div class="emp-actions">
+        <button type="button" onclick="openEditEmployeeModal('${emp.emp_id}')">Edit</button>
+        <button type="button" onclick="handleDeleteEmployee('${emp.emp_id}')">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadEmployeesPage(page = 1, forceRefresh = false) {
+  state.empPage = Math.max(1, Number(page || 1));
+  showErrorBanner('');
+
+  // Fast instant client-side filtering/sorting/pagination if full list is already cached
+  if (!forceRefresh && Array.isArray(state.empListCache)) {
+    renderEmployeesPage(filterAndPaginateLocalEmployees(state.empListCache));
+    return;
+  }
+
+  const container = document.getElementById('employeesListContainer');
+  if (container && !state.empListCache) {
+    container.innerHTML = '<div class="loading-state">Loading employees...</div>';
+  }
+
+  const reqKey = 'empList';
+  if (state.inFlight.has(reqKey)) return;
+  state.inFlight.add(reqKey);
+
+  try {
+    const allEmployees = await callGasApi('getAllEmployees');
+    state.empListCache = Array.isArray(allEmployees) ? allEmployees : [];
+    renderEmployeesPage(filterAndPaginateLocalEmployees(state.empListCache));
+  } catch (err) {
+    showErrorBanner(err.message || String(err));
+    if (container) {
+      container.innerHTML = '<div class="error-state">Could not load employees.</div>';
+    }
+  } finally {
+    state.inFlight.delete(reqKey);
+  }
+}
+
+function handleEmployeeSearchInput(value) {
+  state.empSearch = value || '';
+  state.empPage = 1;
+  loadEmployeesPage(1);
+}
+
+function handleEmployeeSortChange(sortBy, sortDir) {
+  if (sortBy) state.empSortBy = sortBy;
+  if (sortDir) state.empSortDir = sortDir;
+  state.empPage = 1;
+  loadEmployeesPage(1);
+}
+
+async function handleAddEmployee(payload) {
+  setLoading(true);
+  try {
+    const msg = await callGasApi('addEmployee', payload);
+    invalidateClientCaches();
+    showToast(typeof msg === 'string' ? msg : 'Employee added.');
+    await loadDashboard(true);
+    await loadEmployeesPage(1, true);
+  } catch (err) {
+    showToast(err.message || 'Failed to add employee', true);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function openEditEmployeeModal(empId) {
+  const emp = (state.empListCache || []).find(e => String(e.emp_id) === String(empId));
+  if (!emp) {
+    showToast('Employee record not found in memory. Refreshing...', true);
+    loadEmployeesPage(state.empPage, true);
+    return;
+  }
+  const modal = document.getElementById('editEmployeeModal');
+  if (!modal) return;
+  const setVal = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = v ?? '';
+  };
+  setVal('editEmpId', emp.emp_id);
+  setVal('editFullName', emp.full_name);
+  setVal('editRole', emp.role);
+  setVal('editUnitId', emp.unit_id);
+  setVal('editSalary', emp.monthly_salary_egp);
+  setVal('editShiftType', emp.shift_type || 'Day');
+  setVal('editSafetyCert', emp.safety_certified || 'Yes');
+  setVal('editPerfScore', emp.performance_score ?? 4.5);
+  setVal('editStatus', emp.status || 'Active');
+  modal.style.display = 'flex';
+}
+
+async function handleUpdateEmployee(payload) {
+  setLoading(true);
+  try {
+    const msg = await callGasApi('updateEmployee', payload);
+    invalidateClientCaches();
+    showToast(typeof msg === 'string' ? msg : 'Employee updated.');
+    const modal = document.getElementById('editEmployeeModal');
+    if (modal) modal.style.display = 'none';
+    await loadDashboard(true);
+    await loadEmployeesPage(state.empPage, true);
+  } catch (err) {
+    showToast(err.message || 'Failed to update employee', true);
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function handleDeleteEmployee(empId) {
+  if (!confirm(`Delete employee ${empId}?`)) return;
+  setLoading(true);
+  try {
+    const msg = await callGasApi('deleteEmployee', { empId });
+    invalidateClientCaches();
+    showToast(typeof msg === 'string' ? msg : 'Employee deleted.');
+    await loadDashboard(true);
+    await loadEmployeesPage(state.empPage, true);
+  } catch (err) {
+    showToast(err.message || 'Failed to delete employee', true);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// -------------------- Activity Log --------------------
+
+function renderActivityList(logs = []) {
+  const container = document.getElementById('activityListContainer');
+  if (!container) return;
+  if (!logs.length) {
+    container.innerHTML = '<div class="empty-state">No recent activity logged.</div>';
+    return;
+  }
+  container.innerHTML = logs.map(item => `
+    <div class="activity-item">
+      <strong>${item.action}</strong> — <span>${item.details}</span>
+      <div class="activity-time">${item.timestamp}</div>
+    </div>
+  `).join('');
+}
+
+async function loadRecentActivity(forceRefresh = false) {
+  if (!forceRefresh && Array.isArray(state.activityCache)) {
+    renderActivityList(state.activityCache);
+    return;
+  }
+
+  try {
+    const logs = await callGasApi('getRecentActivity');
+    state.activityCache = Array.isArray(logs) ? logs : [];
+    renderActivityList(state.activityCache);
+  } catch (err) {
+    showToast(err.message || 'Failed to load activity log', true);
+  }
+}
+
+// -------------------- Initialization --------------------
+
+function bindEvents() {
+  document.querySelectorAll('[data-nav-tab]').forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.getAttribute('data-nav-tab')));
+  });
+
+  document.querySelectorAll('#unitFilter, #deptFilter').forEach(select => {
+    select.addEventListener('change', e => {
+      state.unitId = e.target.value || 'ALL';
+      state.empPage = 1;
+      loadDashboard(false); // Uses cached data if already viewed; fetches once if new unit
+    });
+  });
+
+  document.querySelectorAll('[data-refresh-btn]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      invalidateClientCaches();
+      loadDashboard(true);
+    });
+  });
+
+  const searchInput = document.getElementById('empSearchInput');
+  if (searchInput) {
+    searchInput.addEventListener('input', e => handleEmployeeSearchInput(e.target.value));
+  }
+
+  const sortBySelect = document.getElementById('empSortBy');
+  const sortDirSelect = document.getElementById('empSortDir');
+  if (sortBySelect) {
+    sortBySelect.addEventListener('change', () => handleEmployeeSortChange(sortBySelect.value, null));
+  }
+  if (sortDirSelect) {
+    sortDirSelect.addEventListener('change', () => handleEmployeeSortChange(null, sortDirSelect.value));
+  }
+
+  const prevBtn = document.getElementById('empPrevBtn');
+  const nextBtn = document.getElementById('empNextBtn');
+  if (prevBtn) prevBtn.addEventListener('click', () => loadEmployeesPage(state.empPage - 1));
+  if (nextBtn) nextBtn.addEventListener('click', () => loadEmployeesPage(state.empPage + 1));
+
+  const addForm = document.getElementById('addEmployeeForm');
+  if (addForm) {
+    addForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const fd = new FormData(addForm);
+      handleAddEmployee({
+        full_name: fd.get('full_name'),
+        role: fd.get('role'),
+        unit_id: fd.get('unit_id'),
+        monthly_salary_egp: Number(fd.get('monthly_salary_egp') || 0),
+        shift_type: fd.get('shift_type') || 'Day',
+        safety_certified: fd.get('safety_certified') || 'Yes',
+        performance_score: Number(fd.get('performance_score') || 4.5)
+      });
+      addForm.reset();
+    });
+  }
+
+  const editForm = document.getElementById('editEmployeeForm');
+  if (editForm) {
+    editForm.addEventListener('submit', e => {
+      e.preventDefault();
+      handleUpdateEmployee({
+        emp_id: document.getElementById('editEmpId').value,
+        full_name: document.getElementById('editFullName').value,
+        role: document.getElementById('editRole').value,
+        unit_id: document.getElementById('editUnitId').value,
+        monthly_salary_egp: Number(document.getElementById('editSalary').value || 0),
+        shift_type: document.getElementById('editShiftType').value,
+        safety_certified: document.getElementById('editSafetyCert').value,
+        performance_score: Number(document.getElementById('editPerfScore').value || 4.5),
+        status: document.getElementById('editStatus').value
+      });
+    });
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
-  initPwa();
-  if (typeof google !== 'undefined' && google.charts) {
-    google.charts.load('current', { packages: ['corechart'] });
-    google.charts.setOnLoadCallback(() => refreshAll(false));
-  } else {
-    refreshAll(false);
-  }
+  bindEvents();
+  switchTab(state.activeTab);
+  loadDashboard(false);
 });
