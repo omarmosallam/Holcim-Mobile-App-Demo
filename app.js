@@ -1,6 +1,5 @@
 /**
- * Holcim Egypt Management & KPI Dashboard — External PWA Client (app.js)
- * Fully wired to index.html IDs, Google Charts, PWA Install/SW, and Code.gs /exec bridge.
+ * Holcim Egypt Management & Operations Dashboard — External PWA Client (app.js)
  */
 
 const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
@@ -11,8 +10,8 @@ const state = {
   deptId: 'ALL',
   empPage: 1,
   empTotalPages: 1,
-  dashboardCache: new Map(), // unitId -> dashboard payload
-  empListCache: null,       // full employee list for instant search/sort/page
+  dashboardCache: new Map(),
+  empListCache: null,
   empListVersion: null,
   activityCache: null,
   activityVersion: null,
@@ -26,7 +25,7 @@ const state = {
 const TAB_TITLES = {
   overview: 'Dashboard Overview',
   employees: 'Employee Directory',
-  analytics: 'Workforce & Budget Analytics',
+  analytics: 'Analytics & Optimization',
   activity: 'Recent Activity Log'
 };
 
@@ -118,8 +117,22 @@ function updateConnectionStatus() {
   pill.textContent = online ? '● Live Sheets Sync' : '● Offline Mode';
 }
 
+function updateSyncTimestamp() {
+  const el = document.getElementById('lastSyncText');
+  if (!el) return;
+  const now = new Date();
+  el.textContent = `• Updated ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
+}
+
+function formatCompactEgp(n) {
+  const num = Number(n || 0);
+  if (Math.abs(num) >= 1e9) return `EGP ${(num / 1e9).toFixed(2)}B`;
+  if (Math.abs(num) >= 1e6) return `EGP ${(num / 1e6).toFixed(1)}M`;
+  return `EGP ${formatNumber(num)}`;
 }
 
 function invalidateClientCaches() {
@@ -155,7 +168,10 @@ function switchTab(tabName) {
     loadEmployeesPage(state.empPage);
   } else if (target === 'overview' || target === 'analytics') {
     const current = state.dashboardCache.get(state.deptId);
-    if (current) renderAllCharts(current);
+    if (current) {
+      renderAllCharts(current);
+      renderProjectsTracker(current);
+    }
   } else if (target === 'activity') {
     loadRecentActivity();
   }
@@ -199,10 +215,11 @@ function handleFilterChange() {
   loadDashboard(false);
 }
 
-// -------------------- Dashboard KPIs & Google Charts --------------------
+// -------------------- Dashboard KPIs, Projects & Charts --------------------
 
 function applyDashboardData(data, selectedDept) {
   showAlert('');
+  updateSyncTimestamp();
 
   if (data.dbVersion && data.dbVersion !== state.empListVersion) {
     state.empListCache = null;
@@ -227,7 +244,57 @@ function applyDashboardData(data, selectedDept) {
   setTxt('kpiPayroll', formatNumber(kpis.monthlyPayrollEgp));
   setTxt('kpiAvgScore', `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`);
 
+  // Operational & Sustainability KPIs
+  setTxt('kpiDispatched', `${formatNumber(kpis.totalDispatchedTons)} t`);
+  setTxt('kpiRevenue', formatCompactEgp(kpis.totalRevenueEgp));
+  setTxt('kpiCo2', `${formatNumber(kpis.avgCo2)} kg/t`);
+  setTxt('kpiProjectPct', `${formatNumber(kpis.avgProjectProgress)}%`);
+
+  renderProjectsTracker(data);
   renderAllCharts(data);
+}
+
+function renderProjectsTracker(data) {
+  const container = document.getElementById('projectsTrackerList');
+  const badge = document.getElementById('projectCountBadge');
+  if (!container) return;
+
+  const projects = (data && data.tables && Array.isArray(data.tables.projects))
+    ? data.tables.projects
+    : [];
+
+  if (badge) badge.textContent = `${projects.length} Initiatives`;
+
+  if (!projects.length) {
+    container.innerHTML = '<div class="empty-cell">No active optimization projects for this division.</div>';
+    return;
+  }
+
+  container.innerHTML = projects.map(p => {
+    const pct = Math.min(100, Math.max(0, Number(p.completion_pct || 0)));
+    const statusClass =
+      String(p.status).toLowerCase().includes('complete') ? 'badge-active' :
+      String(p.status).toLowerCase().includes('risk') ? 'badge-leave' : 'badge-info';
+
+    return `
+      <div class="project-item">
+        <div class="project-top">
+          <div>
+            <strong>${p.project_name}</strong>
+            <div class="project-meta">${p.proj_id} • ${p.unit_name || ''}</div>
+          </div>
+          <span class="status-badge ${statusClass}">${p.status || 'In Progress'}</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" style="width: ${pct}%;"></div>
+        </div>
+        <div class="project-foot">
+          <span>Completion</span>
+          <strong>${pct}%</strong>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function drawChartsNow(data) {
@@ -369,9 +436,80 @@ function refreshAll(forceRefresh = true) {
   return loadDashboard(forceRefresh);
 }
 
-// -------------------- Employee Directory (Search, Sort, Pagination, CRUD) --------------------
+// -------------------- Executive Digest Copy & CSV Export --------------------
 
-function getFilteredSortedEmployees(allEmployees) {
+async function copyExecutiveSummary() {
+  const current = state.dashboardCache.get(state.deptId);
+  if (!current || !current.kpis) {
+    showAlert('Dashboard data is still loading.', true);
+    return;
+  }
+
+  const k = current.kpis;
+  const deptSelect = document.getElementById('deptFilter');
+  const scopeLabel = deptSelect
+    ? deptSelect.options[deptSelect.selectedIndex].text
+    : 'All Departments & Divisions';
+
+  const summary = [
+    `HOLCIM EGYPT — EXECUTIVE KPI BRIEF (${scopeLabel})`,
+    `• Headcount: ${formatNumber(k.headcount)} (${formatNumber(k.activeEmployees ?? k.headcount)} active)`,
+    `• Monthly Payroll: EGP ${formatNumber(k.monthlyPayrollEgp)}`,
+    `• Avg KPI Score: ${Number(k.avgPerformance || 0).toFixed(2)} / 5.0`,
+    `• Dispatched Volume: ${formatNumber(k.totalDispatchedTons)} tons`,
+    `• Revenue: ${formatCompactEgp(k.totalRevenueEgp)}`,
+    `• CO2 Intensity: ${formatNumber(k.avgCo2)} kg/t`,
+    `• Optimization Projects Progress: ${formatNumber(k.avgProjectProgress)}%`
+  ].join('\n');
+
+  try {
+    await navigator.clipboard.writeText(summary);
+    showAlert('Executive KPI digest copied to clipboard!', false);
+  } catch (_) {
+    showAlert('Could not access clipboard on this browser.', true);
+  }
+}
+
+async function exportEmployeesCsv() {
+  if (!Array.isArray(state.empListCache)) {
+    await loadEmployeesPage(1, true);
+  }
+  const filtered = getFilteredSortedEmployees(state.empListCache || [], true).items;
+  if (!filtered.length) {
+    showAlert('No employees to export for the current filter.', true);
+    return;
+  }
+
+  const headers = ['Employee ID', 'Full Name', 'Role', 'Department', 'Monthly Salary (EGP)', 'KPI Score', 'Status'];
+  const escapeCsv = val => `"${String(val ?? '').replace(/"/g, '""')}"`;
+  const lines = [
+    headers.join(','),
+    ...filtered.map(e => [
+      escapeCsv(e.emp_id),
+      escapeCsv(e.full_name),
+      escapeCsv(e.role),
+      escapeCsv(e.unit_name),
+      escapeCsv(e.monthly_salary_egp),
+      escapeCsv(e.performance_score),
+      escapeCsv(e.status)
+    ].join(','))
+  ];
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Holcim_Egypt_Employees_${state.deptId}_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showAlert(`Exported ${filtered.length} employee records to CSV.`, false);
+}
+
+// -------------------- Employee Directory --------------------
+
+function getFilteredSortedEmployees(allEmployees, returnAll = false) {
   const searchInput = document.getElementById('searchInput');
   const sortFieldEl = document.getElementById('sortField');
   const sortDirEl = document.getElementById('sortDir');
@@ -411,7 +549,7 @@ function getFilteredSortedEmployees(allEmployees) {
   const start = (safePage - 1) * PAGE_SIZE;
 
   return {
-    items: list.slice(start, start + PAGE_SIZE),
+    items: returnAll ? list : list.slice(start, start + PAGE_SIZE),
     page: safePage,
     total,
     totalPages
@@ -427,7 +565,7 @@ function renderEmployeesTable(pageData) {
   const prevBtn = document.getElementById('prevPageBtn');
   const nextBtn = document.getElementById('nextPageBtn');
 
-  if (indicator) indicator.textContent = `Page ${pageData.page} of ${pageData.totalPages}`;
+  if (indicator) indicator.textContent = `Page ${pageData.page} of ${pageData.totalPages} (${pageData.total})`;
   if (prevBtn) prevBtn.disabled = pageData.page <= 1;
   if (nextBtn) nextBtn.disabled = pageData.page >= pageData.totalPages;
 
@@ -693,7 +831,7 @@ function applySwUpdate() {
   window.location.reload();
 }
 
-// Expose all inline HTML onclick/onchange/oninput functions on window
+// Expose all inline HTML handlers on window
 window.switchTab = switchTab;
 window.refreshAll = refreshAll;
 window.openEmployeeModal = openEmployeeModal;
@@ -704,6 +842,8 @@ window.handleFilterChange = handleFilterChange;
 window.debouncedSearch = debouncedSearch;
 window.loadEmployeesPage = loadEmployeesPage;
 window.changePage = changePage;
+window.copyExecutiveSummary = copyExecutiveSummary;
+window.exportEmployeesCsv = exportEmployeesCsv;
 window.triggerInstallPrompt = triggerInstallPrompt;
 window.dismissIosBanner = dismissIosBanner;
 window.applySwUpdate = applySwUpdate;
