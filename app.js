@@ -2,7 +2,7 @@
  * Holcim Egypt Management & Operations Dashboard — External PWA Client (app.js)
  */
 
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyux_Yi69L74L8ELH17zPlFQb64Dwsj80oc39SzcpP7_V9sgvrPCVoVtFSKaKNShVeOyA/exec';
 const PAGE_SIZE = 10;
 const TASKS_STORAGE_KEY = 'holcim_egypt_action_tasks_v1';
 const SESSION_STORAGE_KEY = 'holcim_egypt_session_v1';
