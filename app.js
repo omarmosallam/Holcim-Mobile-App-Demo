@@ -1,19 +1,49 @@
 /**
  * Holcim Egypt Management & Operations Dashboard — External PWA Client (app.js)
- * Fully wired to index.html IDs, Google Charts, PWA Install/SW, CSV Export,
- * Executive Summary Clipboard Copy, Shift Production Logging, and Code.gs /exec bridge.
  */
 
 const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
 const PAGE_SIZE = 10;
+const TASKS_STORAGE_KEY = 'holcim_egypt_action_tasks_v1';
+
+const DEFAULT_ACTION_TASKS = [
+  {
+    id: 'TSK-101',
+    title: 'Kiln 2 Waste Heat Recovery (WHR) commissioning sign-off',
+    owner: 'Eng. Tarek El-Shenawy',
+    dueLabel: 'Today • 16:00',
+    tag: 'Change Request',
+    done: false
+  },
+  {
+    id: 'TSK-102',
+    title: 'Verify safety certification renewal for Grinding Mill Shift A',
+    owner: 'Ahmed Fawzy',
+    dueLabel: 'Tomorrow',
+    tag: 'HSE Approval',
+    done: false
+  },
+  {
+    id: 'TSK-103',
+    title: 'ECOPlanet low-carbon cement dispatch target review',
+    owner: 'Eng. Nadia Mansour',
+    dueLabel: 'Completed',
+    tag: 'Optimization',
+    done: true
+  }
+];
 
 const state = {
   activeTab: 'overview',
   deptId: 'ALL',
+  periodFilter: 'ALL',
+  taskFilter: 'ALL',
+  alertChip: 'ALL',
+  tasks: loadSavedTasks(),
   empPage: 1,
   empTotalPages: 1,
-  dashboardCache: new Map(), // unitId -> dashboard payload
-  empListCache: null,       // full employee list for instant search/sort/page/export
+  dashboardCache: new Map(),
+  empListCache: null,
   empListVersion: null,
   activityCache: null,
   activityVersion: null,
@@ -27,9 +57,106 @@ const state = {
 const TAB_TITLES = {
   overview: 'Dashboard Overview',
   employees: 'Employee Directory',
-  analytics: 'Analytics & Optimization',
-  activity: 'Recent Activity Log'
+  analytics: 'Analytics & Timeline',
+  activity: 'Alerts & Activity'
 };
+
+// -------------------- Local Action Tasks Persistence --------------------
+
+function loadSavedTasks() {
+  try {
+    const raw = localStorage.getItem(TASKS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    }
+  } catch (_) {}
+  return DEFAULT_ACTION_TASKS.slice();
+}
+
+function saveTasks() {
+  try {
+    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(state.tasks));
+  } catch (_) {}
+}
+
+function setTaskFilter(filterKey) {
+  state.taskFilter = filterKey;
+  document.querySelectorAll('[data-task-filter]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-task-filter') === filterKey);
+  });
+  renderActionTasks();
+}
+
+function addActionTask() {
+  const input = document.getElementById('newTaskTitle');
+  const title = (input && input.value || '').trim();
+  if (!title) return;
+
+  state.tasks.unshift({
+    id: 'TSK-' + Math.floor(100 + Math.random() * 900),
+    title,
+    owner: 'Process Optimization',
+    dueLabel: 'Pending Review',
+    tag: 'Action Required',
+    done: false
+  });
+  saveTasks();
+  if (input) input.value = '';
+  renderActionTasks();
+  showAlert('Action item added to queue.', false);
+}
+
+function toggleActionTask(taskId) {
+  const item = state.tasks.find(t => t.id === taskId);
+  if (!item) return;
+  item.done = !item.done;
+  item.dueLabel = item.done ? 'Completed' : 'Pending Review';
+  saveTasks();
+  renderActionTasks();
+}
+
+function removeActionTask(taskId) {
+  state.tasks = state.tasks.filter(t => t.id !== taskId);
+  saveTasks();
+  renderActionTasks();
+}
+
+function renderActionTasks() {
+  const listEl = document.getElementById('actionTasksList');
+  if (!listEl) return;
+
+  const filtered = state.tasks.filter(t => {
+    if (state.taskFilter === 'PENDING') return !t.done;
+    if (state.taskFilter === 'DONE') return t.done;
+    return true;
+  });
+
+  if (!filtered.length) {
+    listEl.innerHTML = '<li class="empty-cell">No tasks in this view.</li>';
+    return;
+  }
+
+  listEl.innerHTML = filtered.map(t => `
+    <li class="task-item ${t.done ? 'is-done' : ''}">
+      <button type="button" class="task-check" aria-label="Toggle task" onclick="toggleActionTask('${t.id}')">
+        ${t.done ? '✓' : ''}
+      </button>
+      <div class="task-body">
+        <div class="task-title">${escapeHtml(t.title)}</div>
+        <div class="task-meta">
+          <span class="task-tag">${escapeHtml(t.tag)}</span>
+          <span>${escapeHtml(t.owner)}</span>
+          <span>• ${escapeHtml(t.dueLabel)}</span>
+        </div>
+      </div>
+      <div class="task-actions">
+        <button type="button" class="btn-chip-sm" onclick="toggleActionTask('${t.id}')">${t.done ? 'Reopen' : 'Approve'}</button>
+        <button type="button" class="btn-chip-del" aria-label="Remove task" onclick="removeActionTask('${t.id}')">✕</button>
+      </div>
+    </li>
+  `).join('');
+}
 
 // -------------------- Google Charts Loader --------------------
 
@@ -51,7 +178,7 @@ function ensureGoogleChartsReady(onReady) {
         google.charts.setOnLoadCallback(() => {
           state.googleChartsReady = true;
           state.googleChartsLoading = false;
-          const current = state.dashboardCache.get(state.deptId);
+          const current = getScopedDashboardData();
           if (current) drawChartsNow(current);
           if (typeof onReady === 'function') onReady();
         });
@@ -85,6 +212,14 @@ async function callGasApi(action, payload = {}) {
 }
 
 // -------------------- UI Helpers --------------------
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 function setLoading(isLoading) {
   const bar = document.getElementById('loadingBar');
@@ -145,6 +280,63 @@ function invalidateClientCaches() {
   state.activityVersion = null;
 }
 
+// -------------------- Period Scoping Helper --------------------
+
+function getScopedDashboardData() {
+  const base = state.dashboardCache.get(state.deptId);
+  if (!base) return null;
+  if (state.periodFilter === 'ALL') return base;
+
+  const prodAll = (base.tables && base.tables.production) || [];
+  const months = Array.from(new Set(prodAll.map(p => String(p.month || '')))).filter(Boolean).sort();
+  let scopedProd = prodAll;
+
+  if (state.periodFilter === 'LATEST' && months.length) {
+    const latestMonth = months[months.length - 1];
+    scopedProd = prodAll.filter(p => String(p.month) === latestMonth);
+  } else if (state.periodFilter === 'Q3_Q4') {
+    scopedProd = prodAll.filter(p => {
+      const m = String(p.month || '');
+      return m.endsWith('-07') || m.endsWith('-08') || m.endsWith('-09') || m.endsWith('-10') || m.endsWith('-11') || m.endsWith('-12');
+    });
+  }
+
+  const totalProducedTons = scopedProd.reduce((s, r) => s + Number(r.cement_produced_tons || 0), 0);
+  const totalDispatchedTons = scopedProd.reduce((s, r) => s + Number(r.cement_dispatched_tons || 0), 0);
+  const totalRevenueEgp = scopedProd.reduce((s, r) => s + Number(r.revenue_egp || 0), 0);
+  const avgCo2 = scopedProd.length
+    ? Math.round(scopedProd.reduce((s, r) => s + Number(r.co2_kg_per_ton || 0), 0) / scopedProd.length)
+    : 0;
+  const avgUptime = scopedProd.length
+    ? Number((scopedProd.reduce((s, r) => s + Number(r.kiln_uptime_pct || 0), 0) / scopedProd.length).toFixed(1))
+    : 0;
+
+  return {
+    ...base,
+    kpis: {
+      ...(base.kpis || {}),
+      totalProducedTons,
+      totalDispatchedTons,
+      totalRevenueEgp,
+      avgCo2,
+      avgUptime
+    },
+    tables: {
+      ...(base.tables || {}),
+      production: scopedProd
+    }
+  };
+}
+
+function handlePeriodChange() {
+  const sel = document.getElementById('periodFilter');
+  state.periodFilter = (sel && sel.value) || 'ALL';
+  const scoped = getScopedDashboardData();
+  if (scoped) {
+    applyDashboardData(scoped, state.deptId);
+  }
+}
+
 // -------------------- Tab Navigation --------------------
 
 function switchTab(tabName) {
@@ -169,12 +361,14 @@ function switchTab(tabName) {
   if (target === 'employees') {
     loadEmployeesPage(state.empPage);
   } else if (target === 'overview' || target === 'analytics') {
-    const current = state.dashboardCache.get(state.deptId);
-    if (current) {
-      renderAllCharts(current);
-      renderProjectsTracker(current);
+    const scoped = getScopedDashboardData();
+    if (scoped) {
+      renderAllCharts(scoped);
+      renderProjectsTracker(scoped);
+      renderProjectTimeline(scoped);
     }
   } else if (target === 'activity') {
+    renderNotificationCenter();
     loadRecentActivity();
   }
 }
@@ -217,7 +411,7 @@ function handleFilterChange() {
   loadDashboard(false);
 }
 
-// -------------------- Dashboard KPIs, Projects & Google Charts --------------------
+// -------------------- Dashboard KPIs, Projects, Timeline & Charts --------------------
 
 function applyDashboardData(data, selectedDept) {
   showAlert('');
@@ -245,13 +439,18 @@ function applyDashboardData(data, selectedDept) {
   setTxt('kpiTotalDepts', formatNumber((data.units || []).length || 5));
   setTxt('kpiPayroll', formatNumber(kpis.monthlyPayrollEgp));
   setTxt('kpiAvgScore', `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`);
+  setTxt('kpiSafetyBadge', `HSE ${formatNumber(kpis.safetyCompliancePct ?? 100)}%`);
 
   setTxt('kpiDispatched', `${formatNumber(kpis.totalDispatchedTons)} t`);
+  setTxt('kpiUptimeBadge', `Uptime ${Number(kpis.avgUptime || 0).toFixed(1)}%`);
   setTxt('kpiRevenue', formatCompactEgp(kpis.totalRevenueEgp));
   setTxt('kpiCo2', `${formatNumber(kpis.avgCo2)} kg/t`);
   setTxt('kpiProjectPct', `${formatNumber(kpis.avgProjectProgress)}%`);
 
+  renderActionTasks();
   renderProjectsTracker(data);
+  renderProjectTimeline(data);
+  renderNotificationCenter();
   renderAllCharts(data);
 }
 
@@ -273,18 +472,19 @@ function renderProjectsTracker(data) {
 
   container.innerHTML = projects.map(p => {
     const pct = Math.min(100, Math.max(0, Number(p.completion_pct || 0)));
+    const stLower = String(p.status || '').toLowerCase();
     const statusClass =
-      String(p.status).toLowerCase().includes('complete') ? 'badge-active' :
-      String(p.status).toLowerCase().includes('risk') ? 'badge-leave' : 'badge-info';
+      stLower.includes('complete') ? 'badge-active' :
+      stLower.includes('risk') ? 'badge-leave' : 'badge-info';
 
     return `
       <div class="project-item">
         <div class="project-top">
           <div>
-            <strong>${p.project_name}</strong>
-            <div class="project-meta">${p.proj_id} • ${p.unit_name || ''}</div>
+            <strong>${escapeHtml(p.project_name)}</strong>
+            <div class="project-meta">${escapeHtml(p.proj_id)} • ${escapeHtml(p.unit_name || '')}</div>
           </div>
-          <span class="status-badge ${statusClass}">${p.status || 'In Progress'}</span>
+          <span class="status-badge ${statusClass}">${escapeHtml(p.status || 'In Progress')}</span>
         </div>
         <div class="progress-track">
           <div class="progress-fill" style="width: ${pct}%;"></div>
@@ -298,13 +498,48 @@ function renderProjectsTracker(data) {
   }).join('');
 }
 
+function renderProjectTimeline(data) {
+  const container = document.getElementById('projectTimelineView');
+  if (!container) return;
+
+  const projects = (data && data.tables && Array.isArray(data.tables.projects))
+    ? data.tables.projects
+    : [];
+
+  if (!projects.length) {
+    container.innerHTML = '<div class="empty-cell">No timeline initiatives available.</div>';
+    return;
+  }
+
+  container.innerHTML = projects.map((p, idx) => {
+    const pct = Math.min(100, Math.max(8, Number(p.completion_pct || 0)));
+    const barColor =
+      String(p.status).toLowerCase().includes('risk') ? '#d97706' :
+      String(p.status).toLowerCase().includes('complete') ? '#0d9488' : '#0284c7';
+    const offsetPct = Math.min(35, idx * 6);
+
+    return `
+      <div class="timeline-row">
+        <div class="timeline-label">
+          <strong>${escapeHtml(p.project_name)}</strong>
+          <span>${escapeHtml(p.unit_name || p.unit_id || '')}</span>
+        </div>
+        <div class="timeline-track">
+          <div class="timeline-bar" style="margin-left: ${offsetPct}%; width: ${Math.max(18, pct - offsetPct * 0.4)}%; background: ${barColor};">
+            ${pct}%
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 function drawChartsNow(data) {
   if (!window.google || !google.visualization || !data) return;
 
   const units = data.units || [];
   const employees = (data.tables && data.tables.employees) || [];
 
-  // 1. Overview Chart 1: Headcount by Department
   const hcEl = document.getElementById('chartDeptHeadcount');
   if (hcEl && hcEl.offsetParent !== null) {
     const rows = [['Department', 'Headcount']];
@@ -326,7 +561,6 @@ function drawChartsNow(data) {
     });
   }
 
-  // 2. Overview Chart 2: Workforce Status Breakdown
   const statusEl = document.getElementById('chartStatusPie');
   if (statusEl && statusEl.offsetParent !== null) {
     const counts = {};
@@ -347,7 +581,6 @@ function drawChartsNow(data) {
     });
   }
 
-  // 3. Analytics Chart 1: Department Budget vs. Annualized Payroll
   const budgetEl = document.getElementById('chartBudgetCompare');
   if (budgetEl && budgetEl.offsetParent !== null) {
     const rows = [['Department', 'Annual Budget (EGP)', 'Annualized Payroll (EGP)']];
@@ -370,7 +603,6 @@ function drawChartsNow(data) {
     });
   }
 
-  // 4. Analytics Chart 2: Average Performance Score by Division
   const perfEl = document.getElementById('chartPerfCompare');
   if (perfEl && perfEl.offsetParent !== null) {
     const rows = [['Department', 'Avg KPI Score']];
@@ -405,7 +637,7 @@ async function loadDashboard(forceRefresh = false) {
   const selectedDept = state.deptId || 'ALL';
 
   if (!forceRefresh && state.dashboardCache.has(selectedDept)) {
-    applyDashboardData(state.dashboardCache.get(selectedDept), selectedDept);
+    applyDashboardData(getScopedDashboardData(), selectedDept);
     if (state.activeTab === 'employees') loadEmployeesPage(state.empPage);
     if (state.activeTab === 'activity') loadRecentActivity();
     return;
@@ -420,7 +652,7 @@ async function loadDashboard(forceRefresh = false) {
   try {
     const data = await callGasApi('getDashboardData', { unitId: selectedDept });
     state.dashboardCache.set(selectedDept, data);
-    applyDashboardData(data, selectedDept);
+    applyDashboardData(getScopedDashboardData(), selectedDept);
 
     if (state.activeTab === 'employees') await loadEmployeesPage(state.empPage, forceRefresh);
     if (state.activeTab === 'activity') await loadRecentActivity(forceRefresh);
@@ -437,10 +669,110 @@ function refreshAll(forceRefresh = true) {
   return loadDashboard(forceRefresh);
 }
 
+// -------------------- Notification Center --------------------
+
+function buildAlertsList() {
+  const alerts = [];
+  const dash = getScopedDashboardData();
+
+  state.tasks.filter(t => !t.done).forEach(t => {
+    alerts.push({
+      id: t.id,
+      type: 'ACTION',
+      badge: 'Action Required',
+      badgeClass: 'badge-leave',
+      title: t.title,
+      detail: `${t.tag} • ${t.owner}`,
+      time: t.dueLabel
+    });
+  });
+
+  const safetyRows = (dash && dash.tables && Array.isArray(dash.tables.safety)) ? dash.tables.safety : [];
+  safetyRows.forEach(s => {
+    alerts.push({
+      id: s.incident_id,
+      type: 'HSE',
+      badge: s.category || 'HSE Log',
+      badgeClass: 'badge-info',
+      title: s.notes || `${s.category} (${s.severity})`,
+      detail: `${s.unit_name || s.unit_id} • Severity: ${s.severity || 'Low'}`,
+      time: s.date || ''
+    });
+  });
+
+  const projRows = (dash && dash.tables && Array.isArray(dash.tables.projects)) ? dash.tables.projects : [];
+  projRows.forEach(p => {
+    alerts.push({
+      id: p.proj_id,
+      type: 'PROJECT',
+      badge: p.status || 'Initiative',
+      badgeClass: String(p.status).toLowerCase().includes('risk') ? 'badge-leave' : 'badge-active',
+      title: `${p.project_name} (${p.completion_pct || 0}%)`,
+      detail: `${p.unit_name || p.unit_id} • Lead: ${p.lead_name || p.lead_emp_id}`,
+      time: p.proj_id
+    });
+  });
+
+  return alerts;
+}
+
+function setAlertChip(chipKey) {
+  state.alertChip = chipKey;
+  document.querySelectorAll('[data-alert-chip]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-alert-chip') === chipKey);
+  });
+  renderNotificationCenter();
+}
+
+function renderNotificationCenter() {
+  const allAlerts = buildAlertsList();
+  const actionCount = allAlerts.filter(a => a.type === 'ACTION').length;
+
+  const sideBadge = document.getElementById('sidebarAlertBadge');
+  const mobBadge = document.getElementById('mobileAlertBadge');
+  const summaryEl = document.getElementById('alertCountSummary');
+
+  if (sideBadge) sideBadge.textContent = String(actionCount);
+  if (summaryEl) summaryEl.textContent = `${allAlerts.length} Items (${actionCount} Action)`;
+  if (mobBadge) {
+    mobBadge.textContent = String(actionCount);
+    mobBadge.classList.toggle('hidden', actionCount <= 0);
+  }
+
+  const feed = document.getElementById('notificationsFeed');
+  if (!feed) return;
+
+  const q = String((document.getElementById('alertSearchInput')?.value) || '').toLowerCase().trim();
+  const filtered = allAlerts.filter(item => {
+    const matchChip = state.alertChip === 'ALL' || item.type === state.alertChip;
+    const matchQuery = !q ||
+      String(item.title).toLowerCase().includes(q) ||
+      String(item.detail).toLowerCase().includes(q) ||
+      String(item.badge).toLowerCase().includes(q);
+    return matchChip && matchQuery;
+  });
+
+  if (!filtered.length) {
+    feed.innerHTML = '<li class="empty-cell">No notifications match your filter.</li>';
+    return;
+  }
+
+  feed.innerHTML = filtered.slice(0, 12).map(item => `
+    <li class="notif-item">
+      <div class="notif-top">
+        <span class="status-badge ${item.badgeClass}">${escapeHtml(item.badge)}</span>
+        <span class="act-time">${escapeHtml(item.time)}</span>
+      </div>
+      <div class="notif-title">${escapeHtml(item.title)}</div>
+      <div class="notif-detail">${escapeHtml(item.detail)}</div>
+    </li>
+  `).join('');
+}
+
 // -------------------- Executive Digest Copy & CSV Export --------------------
 
 async function copyExecutiveSummary() {
-  const current = state.dashboardCache.get(state.deptId);
+  const current = getScopedDashboardData();
   if (!current || !current.kpis) {
     showAlert('Dashboard data is still loading.', true);
     return;
@@ -508,7 +840,7 @@ async function exportEmployeesCsv() {
   showAlert(`Exported ${filtered.length} employee records to CSV.`, false);
 }
 
-// -------------------- Employee Directory (Search, Sort, Pagination, CRUD) --------------------
+// -------------------- Employee Directory --------------------
 
 function getFilteredSortedEmployees(allEmployees, returnAll = false) {
   const searchInput = document.getElementById('searchInput');
@@ -584,13 +916,13 @@ function renderEmployeesTable(pageData) {
 
     return `
       <tr>
-        <td data-label="ID"><strong>${emp.emp_id}</strong></td>
-        <td data-label="Employee">${emp.full_name}</td>
-        <td data-label="Role">${emp.role}</td>
-        <td data-label="Department">${emp.unit_name}</td>
+        <td data-label="ID"><strong>${escapeHtml(emp.emp_id)}</strong></td>
+        <td data-label="Employee">${escapeHtml(emp.full_name)}</td>
+        <td data-label="Role">${escapeHtml(emp.role)}</td>
+        <td data-label="Department">${escapeHtml(emp.unit_name)}</td>
         <td data-label="Salary">EGP ${formatNumber(emp.monthly_salary_egp)}</td>
         <td data-label="KPI">${Number(emp.performance_score || 0).toFixed(1)}</td>
-        <td data-label="Status"><span class="status-badge ${statusClass}">${emp.status || 'Active'}</span></td>
+        <td data-label="Status"><span class="status-badge ${statusClass}">${escapeHtml(emp.status || 'Active')}</span></td>
         <td data-label="Actions" class="action-cell">
           <button type="button" class="btn-sm-edit" onclick="openEmployeeModal('${emp.emp_id}')">Edit</button>
           <button type="button" class="btn-sm-del" onclick="deleteEmployeeRecord('${emp.emp_id}')">Delete</button>
@@ -820,10 +1152,10 @@ function renderActivityFeed(logs = []) {
   feed.innerHTML = logs.map(item => `
     <li class="activity-item">
       <div class="act-top">
-        <strong>${item.action}</strong>
-        <span class="act-time">${item.timestamp}</span>
+        <strong>${escapeHtml(item.action)}</strong>
+        <span class="act-time">${escapeHtml(item.timestamp)}</span>
       </div>
-      <div class="act-detail">${item.details}</div>
+      <div class="act-detail">${escapeHtml(item.details)}</div>
     </li>
   `).join('');
 }
@@ -901,6 +1233,13 @@ function applySwUpdate() {
 // Expose all inline HTML handlers on window
 window.switchTab = switchTab;
 window.refreshAll = refreshAll;
+window.handlePeriodChange = handlePeriodChange;
+window.setTaskFilter = setTaskFilter;
+window.addActionTask = addActionTask;
+window.toggleActionTask = toggleActionTask;
+window.removeActionTask = removeActionTask;
+window.setAlertChip = setAlertChip;
+window.renderNotificationCenter = renderNotificationCenter;
 window.openEmployeeModal = openEmployeeModal;
 window.closeEmployeeModal = closeEmployeeModal;
 window.handleSaveEmployee = handleSaveEmployee;
@@ -923,7 +1262,7 @@ window.applySwUpdate = applySwUpdate;
 window.addEventListener('online', updateConnectionStatus);
 window.addEventListener('offline', updateConnectionStatus);
 window.addEventListener('resize', () => {
-  const current = state.dashboardCache.get(state.deptId);
+  const current = getScopedDashboardData();
   if (current) renderAllCharts(current);
 });
 
@@ -932,6 +1271,8 @@ document.addEventListener('DOMContentLoaded', () => {
   checkIosInstallBanner();
   registerServiceWorker();
   ensureGoogleChartsReady();
+  renderActionTasks();
+  renderNotificationCenter();
   switchTab('overview');
   loadDashboard(false);
 });

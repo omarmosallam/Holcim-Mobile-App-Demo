@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0f172a">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="description" content="HOLCIM Egypt Management & Operations Dashboard — Live KPIs, workforce, and optimization tracking.">
+  <meta name="description" content="HOLCIM Egypt Management & Operations Dashboard — Live KPIs, workforce, workflows, alerts, and optimization tracking.">
 
   <!-- PWA Manifest & Icons -->
   <link rel="manifest" href="./manifest.json">
@@ -24,7 +24,7 @@
 </head>
 <body>
   <div class="app-shell">
-    <!-- DESKTOP SIDEBAR (Hidden on Mobile, replaced by Bottom Nav) -->
+    <!-- DESKTOP SIDEBAR -->
     <aside class="sidebar" aria-label="Main Navigation">
       <div class="brand">
         <img src="./icons/icon-192.png" alt="Logo" class="brand-logo">
@@ -35,10 +35,13 @@
       </div>
 
       <nav class="sidebar-nav">
-        <button class="nav-btn active" data-tab="overview" onclick="switchTab('overview')">📊 Overview</button>
+        <button class="nav-btn active" data-tab="overview" onclick="switchTab('overview')">📊 Overview &amp; Tasks</button>
         <button class="nav-btn" data-tab="employees" onclick="switchTab('employees')">👥 Employees</button>
-        <button class="nav-btn" data-tab="analytics" onclick="switchTab('analytics')">📈 Analytics &amp; Projects</button>
-        <button class="nav-btn" data-tab="activity" onclick="switchTab('activity')">🕒 Activity Log</button>
+        <button class="nav-btn" data-tab="analytics" onclick="switchTab('analytics')">📈 Analytics &amp; Timeline</button>
+        <button class="nav-btn" data-tab="activity" onclick="switchTab('activity')">
+          🔔 Alerts &amp; Activity
+          <span id="sidebarAlertBadge" class="nav-badge">0</span>
+        </button>
       </nav>
 
       <div class="sidebar-footer">
@@ -51,7 +54,7 @@
 
     <!-- MAIN CONTENT AREA -->
     <div class="main-wrapper">
-      <!-- TOP APP HEADER (Safe-Area Top Aware) -->
+      <!-- TOP APP HEADER -->
       <header class="app-header">
         <div class="header-left">
           <h1 id="headerTitle">Dashboard Overview</h1>
@@ -69,7 +72,7 @@
         </div>
       </header>
 
-      <!-- iOS SAFARI INSTALL BANNER (Shown only on iOS Safari when not standalone) -->
+      <!-- iOS SAFARI INSTALL BANNER -->
       <div id="iosInstallBanner" class="ios-banner hidden" role="region" aria-label="Install on iOS">
         <div class="ios-banner-text">
           <strong>Install HOLCIM App:</strong> Tap <span>Share ⍗</span> in Safari, then choose <strong>"Add to Home Screen"</strong>.
@@ -87,35 +90,54 @@
       <div id="loadingBar" class="loading-bar hidden"><div class="loading-progress"></div></div>
       <div id="alertBanner" class="alert-banner hidden"></div>
 
-      <!-- GLOBAL DEPARTMENT / DIVISION FILTER BAR -->
+      <!-- GLOBAL DEPARTMENT & REPORT PERIOD FILTER BAR -->
       <section class="filter-strip">
-        <select id="deptFilter" aria-label="Filter by Department" onchange="handleFilterChange()">
-          <option value="ALL">All Departments &amp; Divisions</option>
-        </select>
+        <div class="filter-controls">
+          <select id="deptFilter" aria-label="Filter by Department" onchange="handleFilterChange()">
+            <option value="ALL">All Departments &amp; Divisions</option>
+          </select>
+          <select id="periodFilter" aria-label="Reporting Window" onchange="handlePeriodChange()">
+            <option value="ALL">Report: All Months</option>
+            <option value="LATEST">Report: Latest Month</option>
+            <option value="Q3_Q4">Report: Q3–Q4 2026</option>
+          </select>
+        </div>
         <button type="button" class="btn-secondary desktop-only-btn" onclick="copyExecutiveSummary()">📋 Copy Executive Digest</button>
       </section>
 
-      <!-- TAB 1: OVERVIEW (Workforce + Plant Operations KPIs + Summary Charts) -->
+      <!-- TAB 1: OVERVIEW (KPIs + Workflow/Tasks + Summary Charts) -->
       <main id="tab-overview" class="tab-panel">
         <div class="section-kicker">Workforce &amp; Financial Snapshot</div>
         <section class="kpi-grid">
           <article class="kpi-card">
-            <span class="kpi-label">Total Employees</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">Total Employees</span>
+              <span class="delta-pill positive">Live</span>
+            </div>
             <strong id="kpiTotalEmp" class="kpi-value">—</strong>
             <span id="kpiActiveEmp" class="kpi-sub">Active staff</span>
           </article>
           <article class="kpi-card">
-            <span class="kpi-label">Departments</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">Departments</span>
+              <span class="delta-pill neutral">Units</span>
+            </div>
             <strong id="kpiTotalDepts" class="kpi-value">—</strong>
             <span class="kpi-sub">Active divisions</span>
           </article>
           <article class="kpi-card">
-            <span class="kpi-label">Monthly Payroll</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">Monthly Payroll</span>
+              <span class="delta-pill positive">EGP</span>
+            </div>
             <strong id="kpiPayroll" class="kpi-value">—</strong>
             <span class="kpi-sub">Gross monthly total (EGP)</span>
           </article>
           <article class="kpi-card">
-            <span class="kpi-label">Avg KPI Score</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">Avg KPI Score</span>
+              <span id="kpiSafetyBadge" class="delta-pill positive">HSE —%</span>
+            </div>
             <strong id="kpiAvgScore" class="kpi-value">—</strong>
             <span class="kpi-sub">Performance index</span>
           </article>
@@ -124,25 +146,59 @@
         <div class="section-kicker">Plant Operations, Sustainability &amp; Optimization</div>
         <section class="kpi-grid ops-kpis">
           <article class="kpi-card ops-card">
-            <span class="kpi-label">Dispatched Volume</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">Dispatched Volume</span>
+              <span id="kpiUptimeBadge" class="delta-pill positive">Uptime —%</span>
+            </div>
             <strong id="kpiDispatched" class="kpi-value">—</strong>
             <span class="kpi-sub">Cement &amp; clinker output</span>
           </article>
           <article class="kpi-card ops-card">
-            <span class="kpi-label">Operational Revenue</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">Operational Revenue</span>
+              <span class="delta-pill positive">Gross</span>
+            </div>
             <strong id="kpiRevenue" class="kpi-value">—</strong>
             <span class="kpi-sub">Period gross sales</span>
           </article>
           <article class="kpi-card ops-card">
-            <span class="kpi-label">CO₂ Intensity</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">CO₂ Intensity</span>
+              <span class="delta-pill info">EcoPlanet</span>
+            </div>
             <strong id="kpiCo2" class="kpi-value">—</strong>
             <span class="kpi-sub">Net emissions per ton</span>
           </article>
           <article class="kpi-card ops-card">
-            <span class="kpi-label">Optimization Progress</span>
+            <div class="kpi-top-row">
+              <span class="kpi-label">Optimization Progress</span>
+              <span class="delta-pill info">CAPEX</span>
+            </div>
             <strong id="kpiProjectPct" class="kpi-value">—</strong>
             <span class="kpi-sub">CAPEX &amp; process initiatives</span>
           </article>
+        </section>
+
+        <!-- ACTION ITEMS & APPROVAL WORKFLOW -->
+        <section class="card workflow-card" style="margin-bottom: 16px;">
+          <div class="card-header-flex">
+            <div>
+              <h2>Action Queue &amp; Change Approvals</h2>
+              <p class="card-sub">Track operational follow-ups, safety reviews, and capex sign-offs</p>
+            </div>
+            <div class="segmented-tabs" role="tablist">
+              <button type="button" class="seg-btn active" data-task-filter="ALL" onclick="setTaskFilter('ALL')">All</button>
+              <button type="button" class="seg-btn" data-task-filter="PENDING" onclick="setTaskFilter('PENDING')">Pending</button>
+              <button type="button" class="seg-btn" data-task-filter="DONE" onclick="setTaskFilter('DONE')">Completed</button>
+            </div>
+          </div>
+
+          <div class="quick-task-row">
+            <input type="text" id="newTaskTitle" placeholder="Add action item or approval request (e.g., Review Kiln 2 WHR milestone)...">
+            <button type="button" class="btn-primary" onclick="addActionTask()">+ Task</button>
+          </div>
+
+          <ul id="actionTasksList" class="task-list"></ul>
         </section>
 
         <section class="charts-grid">
@@ -157,7 +213,7 @@
         </section>
       </main>
 
-      <!-- TAB 2: EMPLOYEES (Search, Sort, Pagination, Responsive Cards/Table, CRUD, CSV Export) -->
+      <!-- TAB 2: EMPLOYEES -->
       <main id="tab-employees" class="tab-panel hidden">
         <div class="card">
           <div class="toolbar-mobile">
@@ -177,7 +233,6 @@
             </div>
           </div>
 
-          <!-- Desktop Table / Mobile Card List -->
           <div class="table-responsive">
             <table class="emp-table">
               <thead>
@@ -198,7 +253,6 @@
             </table>
           </div>
 
-          <!-- Touch-Friendly Pagination -->
           <div class="pagination-bar">
             <button type="button" id="prevPageBtn" class="btn-page" onclick="changePage(-1)">← Prev</button>
             <span id="pageIndicator" class="page-info">Page 1 of 1</span>
@@ -207,7 +261,7 @@
         </div>
       </main>
 
-      <!-- TAB 3: ANALYTICS & PROJECTS -->
+      <!-- TAB 3: ANALYTICS, TIMELINE & PROJECTS -->
       <main id="tab-analytics" class="tab-panel hidden">
         <div class="charts-grid" style="margin-bottom: 16px;">
           <div class="card">
@@ -218,6 +272,18 @@
             <h2>Average Performance Score by Division</h2>
             <div id="chartPerfCompare" class="chart-container"></div>
           </div>
+        </div>
+
+        <!-- GANTT / TIMELINE BAR VIEW FOR INITIATIVES -->
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header-flex">
+            <div>
+              <h2>Initiative Execution Timeline</h2>
+              <p class="card-sub">Visual progress &amp; window alignment across optimization initiatives</p>
+            </div>
+            <span class="delta-pill info">Q2–Q4 Schedule</span>
+          </div>
+          <div id="projectTimelineView" class="timeline-list"></div>
         </div>
 
         <div class="card">
@@ -231,8 +297,31 @@
         </div>
       </main>
 
-      <!-- TAB 4: RECENT ACTIVITY LOGS -->
+      <!-- TAB 4: NOTIFICATION CENTER & ACTIVITY LOG -->
       <main id="tab-activity" class="tab-panel hidden">
+        <div class="card" style="margin-bottom: 16px;">
+          <div class="card-header-flex">
+            <div>
+              <h2>Notification &amp; Alert Center</h2>
+              <p class="card-sub">Filter safety observations, at-risk projects, and required actions</p>
+            </div>
+            <span id="alertCountSummary" class="status-badge badge-info">0 Alerts</span>
+          </div>
+
+          <input type="search" id="alertSearchInput" placeholder="Search alerts, HSE notes, or projects..." oninput="renderNotificationCenter()" style="width: 100%; margin-bottom: 10px;">
+
+          <div class="chip-row">
+            <button type="button" class="filter-chip active" data-alert-chip="ALL" onclick="setAlertChip('ALL')">All Alerts</button>
+            <button type="button" class="filter-chip" data-alert-chip="ACTION" onclick="setAlertChip('ACTION')">Action Required</button>
+            <button type="button" class="filter-chip" data-alert-chip="HSE" onclick="setAlertChip('HSE')">HSE &amp; Safety</button>
+            <button type="button" class="filter-chip" data-alert-chip="PROJECT" onclick="setAlertChip('PROJECT')">Project Status</button>
+          </div>
+
+          <ul id="notificationsFeed" class="notif-list">
+            <li class="empty-cell">Loading notifications...</li>
+          </ul>
+        </div>
+
         <div class="card">
           <h2>Recent Audit &amp; Activity Log</h2>
           <ul id="activityFeed" class="activity-list">
@@ -242,7 +331,7 @@
       </main>
     </div>
 
-    <!-- MOBILE BOTTOM NAVIGATION BAR (Safe-Area Bottom Aware) -->
+    <!-- MOBILE BOTTOM NAVIGATION BAR -->
     <nav class="bottom-nav" aria-label="Mobile Navigation">
       <button type="button" class="bottom-btn active" data-tab="overview" onclick="switchTab('overview')">
         <span class="b-icon">📊</span>
@@ -257,13 +346,16 @@
         <span class="b-label">Analytics</span>
       </button>
       <button type="button" class="bottom-btn" data-tab="activity" onclick="switchTab('activity')">
-        <span class="b-icon">🕒</span>
-        <span class="b-label">Activity</span>
+        <span class="b-icon-wrap">
+          <span class="b-icon">🔔</span>
+          <span id="mobileAlertBadge" class="bottom-badge hidden">0</span>
+        </span>
+        <span class="b-label">Alerts</span>
       </button>
     </nav>
   </div>
 
-  <!-- ADD / EDIT EMPLOYEE MODAL (Mobile Bottom-Sheet on Phones, Centered on Desktop) -->
+  <!-- ADD / EDIT EMPLOYEE MODAL -->
   <div id="employeeModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal-sheet">
       <div class="modal-header">

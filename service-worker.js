@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'holcim-pwa-shell-v6';
+const CACHE_VERSION = 'holcim-pwa-shell-v7';
 const STATIC_ASSETS = [
   './',
   './index.html',
