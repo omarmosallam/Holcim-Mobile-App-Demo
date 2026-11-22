@@ -16,6 +16,131 @@ body {
   display: none !important;
 }
 
+/* ================= AUTHENTICATION SCREEN ================= */
+.auth-screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: linear-gradient(145deg, #0f172a 0%, #1e293b 55%, #0f766e 100%);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.auth-brand-title {
+  font-weight: 800;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.auth-brand-sub {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.auth-card h1 {
+  font-size: 21px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.auth-desc {
+  font-size: 13px;
+  color: #64748b;
+  margin: 5px 0 14px;
+}
+
+.auth-card label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  margin: 10px 0 4px;
+}
+
+.auth-card input {
+  width: 100%;
+}
+
+.auth-submit-btn {
+  width: 100%;
+  margin-top: 16px;
+  min-height: 42px;
+}
+
+.demo-accounts-box {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.demo-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+.demo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.demo-chip {
+  background: #f1f5f9;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.demo-chip:hover {
+  background: #e2e8f0;
+}
+
+.session-badge {
+  background: #e6fffa;
+  color: #0f766e;
+  border: 1px solid #99f6e4;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.btn-logout {
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+
+.mobile-logout-btn {
+  display: none;
+}
+
 .app-shell {
   display: flex;
   min-height: 100vh;
@@ -433,6 +558,8 @@ select,
 input[type="text"],
 input[type="number"],
 input[type="search"],
+input[type="email"],
+input[type="password"],
 input[type="file"] {
   min-height: 42px;
   padding: 9px 12px;
@@ -441,6 +568,12 @@ input[type="file"] {
   font-size: 14px;
   background: #fff;
   color: #0f172a;
+}
+
+select:disabled {
+  background: #f1f5f9;
+  color: #475569;
+  cursor: not-allowed;
 }
 
 #deptFilter {
@@ -1111,6 +1244,10 @@ input[type="file"] {
     display: none;
   }
 
+  .mobile-logout-btn {
+    display: inline-flex;
+  }
+
   .main-wrapper {
     padding: 0 14px calc(84px + env(safe-area-inset-bottom));
   }
@@ -1243,6 +1380,8 @@ input[type="file"] {
   input[type="text"],
   input[type="number"],
   input[type="search"],
+  input[type="email"],
+  input[type="password"],
   input[type="file"] {
     font-size: 16px;
   }

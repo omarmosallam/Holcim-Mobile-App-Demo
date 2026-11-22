@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0f172a">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="description" content="HOLCIM Egypt Management & Operations Dashboard — Live KPIs, workforce, workflows, alerts, and optimization tracking.">
+  <meta name="description" content="HOLCIM Egypt Management & Operations Dashboard — Authenticated KPIs, workforce, workflows, alerts, and department support routing.">
 
   <!-- PWA Manifest & Icons -->
   <link rel="manifest" href="./manifest.json">
@@ -23,14 +23,53 @@
   <script src="https://www.gstatic.com/charts/loader.js" defer></script>
 </head>
 <body>
-  <div class="app-shell">
+  <!-- AUTHENTICATION GATE OVERLAY -->
+  <div id="authScreen" class="auth-screen" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <img src="./icons/icon-192.png" alt="Holcim Logo" class="brand-logo">
+        <div>
+          <div class="auth-brand-title">HOLCIM EGYPT</div>
+          <div class="auth-brand-sub">Department Access &amp; Operations Portal</div>
+        </div>
+      </div>
+
+      <h1 id="authTitle">Sign In</h1>
+      <p class="auth-desc">Sign in with your division account to view scoped department data and route support requests.</p>
+
+      <div id="authErrorBanner" class="alert-banner error hidden"></div>
+
+      <form id="loginForm" onsubmit="handleLoginSubmit(event)">
+        <label for="loginEmail">Work Email</label>
+        <input type="email" id="loginEmail" required autocomplete="username" placeholder="name@holcim-egypt.demo">
+
+        <label for="loginPasscode">Passcode / Password</label>
+        <input type="password" id="loginPasscode" required autocomplete="current-password" placeholder="Enter passcode">
+
+        <button type="submit" id="loginSubmitBtn" class="btn-primary auth-submit-btn">Sign In to Portal</button>
+      </form>
+
+      <div class="demo-accounts-box">
+        <div class="demo-title">Quick Demo Accounts (Department-Scoped)</div>
+        <div class="demo-chips">
+          <button type="button" class="demo-chip" onclick="fillDemoCredentials('exec@holcim-egypt.demo', 'Holcim@2026')">Executive (All Units)</button>
+          <button type="button" class="demo-chip" onclick="fillDemoCredentials('sokhna@holcim-egypt.demo', 'Sokhna@2026')">Sokhna Plant (UNIT-01)</button>
+          <button type="button" class="demo-chip" onclick="fillDemoCredentials('cairo@holcim-egypt.demo', 'Cairo@2026')">Cairo Grinding (UNIT-02)</button>
+          <button type="button" class="demo-chip" onclick="fillDemoCredentials('hq@holcim-egypt.demo', 'Hq@2026')">Finance &amp; HQ (UNIT-05)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APPLICATION SHELL -->
+  <div id="appShell" class="app-shell hidden">
     <!-- DESKTOP SIDEBAR -->
     <aside class="sidebar" aria-label="Main Navigation">
       <div class="brand">
         <img src="./icons/icon-192.png" alt="Logo" class="brand-logo">
         <div>
           <div class="brand-title">HOLCIM EGYPT</div>
-          <div class="brand-sub">Operations &amp; KPI Suite</div>
+          <div id="sidebarUserSub" class="brand-sub">Operations &amp; KPI Suite</div>
         </div>
       </div>
 
@@ -50,6 +89,7 @@
         <button type="button" class="btn-outline-light" onclick="openProductionModal()">⚡ Log Shift</button>
         <button type="button" class="btn-outline-light" onclick="copyExecutiveSummary()">📋 Copy KPI Digest</button>
         <button type="button" class="btn-outline-light" onclick="refreshAll(true)">↻ Refresh Live Data</button>
+        <button type="button" class="btn-outline-light btn-logout" onclick="handleLogout()">🚪 Sign Out</button>
       </div>
     </aside>
 
@@ -61,6 +101,7 @@
           <h1 id="headerTitle">Dashboard Overview</h1>
           <div class="status-row">
             <span id="connectionPill" class="status-pill online">● Live Sheets Sync</span>
+            <span id="userSessionBadge" class="session-badge">—</span>
             <span id="lastSyncText" class="sync-time">Syncing...</span>
           </div>
         </div>
@@ -71,6 +112,7 @@
           <button type="button" class="btn-icon" title="Copy Executive Summary" aria-label="Copy Summary" onclick="copyExecutiveSummary()">📋</button>
           <button type="button" class="btn-icon" title="Refresh Live Data" aria-label="Refresh" onclick="refreshAll(true)">↻</button>
           <button type="button" class="btn-primary" onclick="openEmployeeModal()">+ Add</button>
+          <button type="button" class="btn-icon mobile-logout-btn" title="Sign Out" aria-label="Sign Out" onclick="handleLogout()">🚪</button>
         </div>
       </header>
 
@@ -125,7 +167,7 @@
               <span class="delta-pill neutral">Units</span>
             </div>
             <strong id="kpiTotalDepts" class="kpi-value">—</strong>
-            <span class="kpi-sub">Active divisions</span>
+            <span class="kpi-sub">Scoped divisions</span>
           </article>
           <article class="kpi-card">
             <div class="kpi-top-row">
@@ -437,7 +479,7 @@
     </div>
   </div>
 
-  <!-- EMPLOYEE SUPPORT & FIX REQUEST MODAL (FACTORY + HEAD OFFICE IT) -->
+  <!-- EMPLOYEE SUPPORT & FIX REQUEST MODAL (EMAIL-ROUTED TO TARGET DEPARTMENT) -->
   <div id="fixRequestModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="fixModalTitle">
     <div class="modal-sheet">
       <div class="modal-header">
@@ -454,8 +496,21 @@
           <option value="Facility &amp; Office">Facility &amp; Office Request</option>
         </select>
 
-        <label for="fixUnitId">Plant / Office Division</label>
-        <select id="fixUnitId" required></select>
+        <div class="form-grid-2">
+          <div>
+            <label for="fixTargetDept">Route Email To Team</label>
+            <select id="fixTargetDept" required>
+              <option value="MAINTENANCE">Plant Maintenance &amp; Eng.</option>
+              <option value="IT_SUPPORT">IT &amp; Laptop Helpdesk</option>
+              <option value="HSE">HSE &amp; Safety Team</option>
+              <option value="FACILITIES">Facilities &amp; Admin HQ</option>
+            </select>
+          </div>
+          <div>
+            <label for="fixUnitId">Plant / Office Division</label>
+            <select id="fixUnitId" required></select>
+          </div>
+        </div>
 
         <label id="fixEquipmentLabel" for="fixEquipment">Equipment / Asset / Issue Title</label>
         <input type="text" id="fixEquipment" required placeholder="e.g., Cooler Fan #2 grating or Work laptop won't charge">
@@ -496,7 +551,7 @@
 
         <div class="modal-footer">
           <button type="button" class="btn-secondary" onclick="closeFixRequestModal()">Cancel</button>
-          <button type="submit" id="saveFixBtn" class="btn-primary">Send Request</button>
+          <button type="submit" id="saveFixBtn" class="btn-primary">Send &amp; Email Team</button>
         </div>
       </form>
     </div>

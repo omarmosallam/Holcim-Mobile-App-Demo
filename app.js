@@ -5,6 +5,7 @@
 const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
 const PAGE_SIZE = 10;
 const TASKS_STORAGE_KEY = 'holcim_egypt_action_tasks_v1';
+const SESSION_STORAGE_KEY = 'holcim_egypt_session_v1';
 
 const DEFAULT_ACTION_TASKS = [
   {
@@ -34,6 +35,7 @@ const DEFAULT_ACTION_TASKS = [
 ];
 
 const state = {
+  session: loadSavedSession(),
   activeTab: 'overview',
   deptId: 'ALL',
   periodFilter: 'ALL',
@@ -65,6 +67,117 @@ const TAB_TITLES = {
   analytics: 'Analytics & Timeline',
   activity: 'Alerts & Activity'
 };
+
+// -------------------- Session & Authentication --------------------
+
+function loadSavedSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY) || localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.token && parsed.user) return parsed;
+  } catch (_) {}
+  return null;
+}
+
+function saveSession(sessionObj) {
+  state.session = sessionObj;
+  try {
+    if (sessionObj) {
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionObj));
+    } else {
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+  } catch (_) {}
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById('authErrorBanner');
+  if (!el) return;
+  if (!msg) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function fillDemoCredentials(email, passcode) {
+  const emailInput = document.getElementById('loginEmail');
+  const passInput = document.getElementById('loginPasscode');
+  if (emailInput) emailInput.value = email;
+  if (passInput) passInput.value = passcode;
+  showAuthError('');
+}
+
+function syncAuthShellVisibility() {
+  const isAuthed = Boolean(state.session && state.session.token && state.session.user);
+  document.getElementById('authScreen')?.classList.toggle('hidden', isAuthed);
+  document.getElementById('appShell')?.classList.toggle('hidden', !isAuthed);
+
+  if (isAuthed) {
+    const u = state.session.user;
+    const allowedUnit = u.allowed_unit_id || 'ALL';
+    state.deptId = allowedUnit !== 'ALL' ? allowedUnit : 'ALL';
+
+    const deptFilter = document.getElementById('deptFilter');
+    if (deptFilter) {
+      deptFilter.disabled = allowedUnit !== 'ALL';
+    }
+
+    const badge = document.getElementById('userSessionBadge');
+    const sideSub = document.getElementById('sidebarUserSub');
+    if (badge) {
+      badge.textContent = `${u.name} • ${u.unit_name || allowedUnit}`;
+    }
+    if (sideSub) {
+      sideSub.textContent = `${u.role} (${allowedUnit === 'ALL' ? 'All Divisions' : allowedUnit})`;
+    }
+  }
+}
+
+async function handleLoginSubmit(event) {
+  event.preventDefault();
+  const btn = document.getElementById('loginSubmitBtn');
+  if (btn) btn.disabled = true;
+  showAuthError('');
+
+  const email = (document.getElementById('loginEmail')?.value || '').trim();
+  const passcode = (document.getElementById('loginPasscode')?.value || '').trim();
+
+  try {
+    const data = await callGasApi('login', { email, passcode }, { skipAuth: true });
+    if (!data || !data.token || !data.user) {
+      throw new Error('Invalid login response from server.');
+    }
+    saveSession(data);
+    invalidateClientCaches();
+    syncAuthShellVisibility();
+    switchTab('overview');
+    await loadDashboard(true);
+  } catch (err) {
+    showAuthError(err.message || 'Sign-in failed. Please check your credentials.');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function handleLogout() {
+  const token = state.session && state.session.token;
+  if (token) {
+    callGasApi('logout', { token }, { skipAuth: true }).catch(() => {});
+  }
+  saveSession(null);
+  invalidateClientCaches();
+  const emailInput = document.getElementById('loginEmail');
+  const passInput = document.getElementById('loginPasscode');
+  if (emailInput) emailInput.value = '';
+  if (passInput) passInput.value = '';
+  showAuthError('');
+  syncAuthShellVisibility();
+}
 
 // -------------------- Local Action Tasks Persistence --------------------
 
@@ -101,7 +214,7 @@ function addActionTask() {
   state.tasks.unshift({
     id: 'TSK-' + Math.floor(100 + Math.random() * 900),
     title,
-    owner: 'Process Optimization',
+    owner: (state.session && state.session.user && state.session.user.name) || 'Process Optimization',
     dueLabel: 'Pending Review',
     tag: 'Action Required',
     done: false
@@ -197,11 +310,15 @@ function ensureGoogleChartsReady(onReady) {
 
 // -------------------- API Bridge (`doPost`) --------------------
 
-async function callGasApi(action, payload = {}) {
+async function callGasApi(action, payload = {}, opts = {}) {
+  const authPayload = (!opts.skipAuth && state.session && state.session.token)
+    ? { token: state.session.token, ...payload }
+    : payload;
+
   const res = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, payload }),
+    body: JSON.stringify({ action, payload: authPayload }),
     redirect: 'follow'
   });
 
@@ -211,7 +328,13 @@ async function callGasApi(action, payload = {}) {
 
   const json = await res.json();
   if (!json || json.ok === false) {
-    throw new Error((json && json.error) || `Action failed: ${action}`);
+    const errMsg = (json && json.error) || `Action failed: ${action}`;
+    if (!opts.skipAuth && /session expired|unauthorized|sign in/i.test(errMsg)) {
+      saveSession(null);
+      syncAuthShellVisibility();
+      showAuthError('Your session expired. Please sign in again.');
+    }
+    throw new Error(errMsg);
   }
   return json.data;
 }
@@ -246,7 +369,7 @@ function showAlert(message, isError = true) {
 
   if (!isError) {
     clearTimeout(showAlert._timer);
-    showAlert._timer = setTimeout(() => banner.classList.add('hidden'), 3200);
+    showAlert._timer = setTimeout(() => banner.classList.add('hidden'), 4200);
   }
 }
 
@@ -381,35 +504,52 @@ function switchTab(tabName) {
 // -------------------- Filter & Dropdowns --------------------
 
 function populateDepartmentDropdowns(units = [], selectedDept = 'ALL') {
+  const allowedUnit = (state.session && state.session.user && state.session.user.allowed_unit_id) || 'ALL';
+  const visibleUnits = allowedUnit !== 'ALL'
+    ? units.filter(u => u.unit_id === allowedUnit)
+    : units;
+
   const deptFilter = document.getElementById('deptFilter');
   if (deptFilter) {
-    deptFilter.innerHTML = '<option value="ALL">All Departments &amp; Divisions</option>';
-    units.forEach(u => {
+    deptFilter.innerHTML = '';
+    if (allowedUnit === 'ALL') {
+      const allOpt = document.createElement('option');
+      allOpt.value = 'ALL';
+      allOpt.textContent = 'All Departments & Divisions';
+      deptFilter.appendChild(allOpt);
+    }
+    visibleUnits.forEach(u => {
       const opt = document.createElement('option');
       opt.value = u.unit_id;
       opt.textContent = u.unit_name;
       deptFilter.appendChild(opt);
     });
-    deptFilter.value = selectedDept || 'ALL';
+    deptFilter.value = allowedUnit !== 'ALL' ? allowedUnit : (selectedDept || 'ALL');
+    deptFilter.disabled = allowedUnit !== 'ALL';
   }
 
   const formDeptId = document.getElementById('formDeptId');
   if (formDeptId) {
     const prev = formDeptId.value;
     formDeptId.innerHTML = '';
-    units.forEach(u => {
+    visibleUnits.forEach(u => {
       const opt = document.createElement('option');
       opt.value = u.unit_id;
       opt.textContent = u.unit_name;
       formDeptId.appendChild(opt);
     });
-    if (prev && units.some(u => u.unit_id === prev)) {
+    if (prev && visibleUnits.some(u => u.unit_id === prev)) {
       formDeptId.value = prev;
     }
   }
 }
 
 function handleFilterChange() {
+  const allowedUnit = (state.session && state.session.user && state.session.user.allowed_unit_id) || 'ALL';
+  if (allowedUnit !== 'ALL') {
+    state.deptId = allowedUnit;
+    return;
+  }
   const deptFilter = document.getElementById('deptFilter');
   state.deptId = (deptFilter && deptFilter.value) || 'ALL';
   state.empPage = 1;
@@ -431,7 +571,8 @@ function applyDashboardData(data, selectedDept) {
     state.activityVersion = data.dbVersion;
   }
 
-  populateDepartmentDropdowns(data.units || [], selectedDept);
+  const effectiveDept = data.effectiveUnitId || selectedDept || 'ALL';
+  populateDepartmentDropdowns(data.units || [], effectiveDept);
 
   const kpis = data.kpis || {};
   const setTxt = (id, v) => {
@@ -639,7 +780,14 @@ function renderAllCharts(data) {
 }
 
 async function loadDashboard(forceRefresh = false) {
-  const selectedDept = state.deptId || 'ALL';
+  if (!state.session || !state.session.token) {
+    syncAuthShellVisibility();
+    return;
+  }
+
+  const allowedUnit = (state.session.user && state.session.user.allowed_unit_id) || 'ALL';
+  const selectedDept = allowedUnit !== 'ALL' ? allowedUnit : (state.deptId || 'ALL');
+  state.deptId = selectedDept;
 
   if (!forceRefresh && state.dashboardCache.has(selectedDept)) {
     applyDashboardData(getScopedDashboardData(), selectedDept);
@@ -785,9 +933,9 @@ async function copyExecutiveSummary() {
 
   const k = current.kpis;
   const deptSelect = document.getElementById('deptFilter');
-  const scopeLabel = deptSelect
+  const scopeLabel = deptSelect && deptSelect.options.length
     ? deptSelect.options[deptSelect.selectedIndex].text
-    : 'All Departments & Divisions';
+    : 'Scoped Division';
 
   const summary = [
     `HOLCIM EGYPT — EXECUTIVE KPI BRIEF (${scopeLabel})`,
@@ -1092,7 +1240,8 @@ function openProductionModal() {
 
   if (prodUnitSelect) {
     const dash = state.dashboardCache.get(state.deptId) || state.dashboardCache.values().next().value;
-    const units = (dash && dash.units) || [];
+    const allowedUnit = (state.session && state.session.user && state.session.user.allowed_unit_id) || 'ALL';
+    const units = ((dash && dash.units) || []).filter(u => allowedUnit === 'ALL' || u.unit_id === allowedUnit);
     prodUnitSelect.innerHTML = '';
     units.forEach(u => {
       const opt = document.createElement('option');
@@ -1149,9 +1298,17 @@ async function handleSaveProduction(event) {
 
 function handleFixCategoryChange() {
   const cat = document.getElementById('fixCategory')?.value || 'Factory / Equipment Fix';
+  const targetDeptEl = document.getElementById('fixTargetDept');
   const eqInput = document.getElementById('fixEquipment');
   const descInput = document.getElementById('fixDescription');
   const statusEl = document.getElementById('fixPhotoStatus');
+
+  if (targetDeptEl) {
+    if (cat.startsWith('IT & Laptop')) targetDeptEl.value = 'IT_SUPPORT';
+    else if (cat.startsWith('Safety / HSE')) targetDeptEl.value = 'HSE';
+    else if (cat.startsWith('Facility & Office')) targetDeptEl.value = 'FACILITIES';
+    else targetDeptEl.value = 'MAINTENANCE';
+  }
 
   if (!eqInput || !descInput) return;
 
@@ -1174,11 +1331,16 @@ function openFixRequestModal() {
   const modal = document.getElementById('fixRequestModal');
   const form = document.getElementById('fixRequestForm');
   const selectEl = document.getElementById('fixUnitId');
+  const reporterInput = document.getElementById('fixReporter');
   if (!modal || !form) return;
 
   form.reset();
   clearFixPhoto();
   handleFixCategoryChange();
+
+  if (reporterInput && state.session && state.session.user) {
+    reporterInput.value = `${state.session.user.name} (${state.session.user.unit_name || state.session.user.allowed_unit_id})`;
+  }
 
   if (selectEl) {
     const dash = state.dashboardCache.get(state.deptId) || state.dashboardCache.values().next().value;
@@ -1292,14 +1454,17 @@ async function handleSubmitFixRequest(event) {
   setLoading(true);
 
   const category = document.getElementById('fixCategory')?.value || 'Factory / Equipment Fix';
+  const targetDept = document.getElementById('fixTargetDept')?.value || 'MAINTENANCE';
   const unitId = document.getElementById('fixUnitId').value;
   const equipment = document.getElementById('fixEquipment').value.trim();
   const severity = document.getElementById('fixSeverity').value;
-  const reporter = document.getElementById('fixReporter').value.trim() || 'Employee';
+  const reporter = document.getElementById('fixReporter').value.trim() ||
+    (state.session && state.session.user && state.session.user.name) || 'Employee';
   const description = document.getElementById('fixDescription').value.trim();
 
   const payload = {
     category,
+    target_dept: targetDept,
     unit_id: unitId,
     equipment,
     severity,
@@ -1314,7 +1479,7 @@ async function handleSubmitFixRequest(event) {
     const msg = await callGasApi('logFixRequest', payload);
     closeFixRequestModal();
     invalidateClientCaches();
-    showAlert(typeof msg === 'string' ? msg : 'Support request submitted.', false);
+    showAlert(typeof msg === 'string' ? msg : 'Support request submitted & emailed.', false);
     await loadDashboard(true);
     if (state.activeTab === 'activity') {
       renderNotificationCenter();
@@ -1422,6 +1587,9 @@ function applySwUpdate() {
 }
 
 // Expose all inline HTML handlers on window
+window.fillDemoCredentials = fillDemoCredentials;
+window.handleLoginSubmit = handleLoginSubmit;
+window.handleLogout = handleLogout;
 window.switchTab = switchTab;
 window.refreshAll = refreshAll;
 window.handlePeriodChange = handlePeriodChange;
@@ -1470,6 +1638,9 @@ document.addEventListener('DOMContentLoaded', () => {
   ensureGoogleChartsReady();
   renderActionTasks();
   renderNotificationCenter();
-  switchTab('overview');
-  loadDashboard(false);
+  syncAuthShellVisibility();
+  if (state.session && state.session.token) {
+    switchTab('overview');
+    loadDashboard(false);
+  }
 });
