@@ -24,7 +24,7 @@
 </head>
 <body>
   <div class="app-shell">
-    <!-- DESKTOP SIDEBAR -->
+    <!-- DESKTOP SIDEBAR (Hidden on Mobile, replaced by Bottom Nav) -->
     <aside class="sidebar" aria-label="Main Navigation">
       <div class="brand">
         <img src="./icons/icon-192.png" alt="Logo" class="brand-logo">
@@ -43,6 +43,7 @@
 
       <div class="sidebar-footer">
         <button id="installBtnDesktop" class="btn-install hidden" onclick="triggerInstallPrompt()">📲 Install App</button>
+        <button class="btn-outline-light" onclick="openProductionModal()">⚡ Log Shift</button>
         <button class="btn-outline-light" onclick="copyExecutiveSummary()">📋 Copy KPI Digest</button>
         <button class="btn-outline-light" onclick="refreshAll(true)">↻ Refresh Live Data</button>
       </div>
@@ -50,7 +51,7 @@
 
     <!-- MAIN CONTENT AREA -->
     <div class="main-wrapper">
-      <!-- TOP APP HEADER -->
+      <!-- TOP APP HEADER (Safe-Area Top Aware) -->
       <header class="app-header">
         <div class="header-left">
           <h1 id="headerTitle">Dashboard Overview</h1>
@@ -61,27 +62,28 @@
         </div>
         <div class="header-actions">
           <button id="installBtnMobile" class="btn-install-sm hidden" onclick="triggerInstallPrompt()">📲 Install</button>
-          <button class="btn-icon" title="Copy Executive Summary" aria-label="Copy Summary" onclick="copyExecutiveSummary()">📋</button>
-          <button class="btn-icon" title="Refresh Live Data" aria-label="Refresh" onclick="refreshAll(true)">↻</button>
-          <button class="btn-primary" onclick="openEmployeeModal()">+ Add</button>
+          <button type="button" class="btn-secondary" onclick="openProductionModal()">⚡ Log Shift</button>
+          <button type="button" class="btn-icon" title="Copy Executive Summary" aria-label="Copy Summary" onclick="copyExecutiveSummary()">📋</button>
+          <button type="button" class="btn-icon" title="Refresh Live Data" aria-label="Refresh" onclick="refreshAll(true)">↻</button>
+          <button type="button" class="btn-primary" onclick="openEmployeeModal()">+ Add</button>
         </div>
       </header>
 
-      <!-- iOS SAFARI INSTALL BANNER -->
+      <!-- iOS SAFARI INSTALL BANNER (Shown only on iOS Safari when not standalone) -->
       <div id="iosInstallBanner" class="ios-banner hidden" role="region" aria-label="Install on iOS">
         <div class="ios-banner-text">
           <strong>Install HOLCIM App:</strong> Tap <span>Share ⍗</span> in Safari, then choose <strong>"Add to Home Screen"</strong>.
         </div>
-        <button class="ios-close" onclick="dismissIosBanner()" aria-label="Dismiss">✕</button>
+        <button type="button" class="ios-close" onclick="dismissIosBanner()" aria-label="Dismiss">✕</button>
       </div>
 
       <!-- UPDATE AVAILABLE BANNER -->
       <div id="swUpdateBanner" class="update-banner hidden">
         <span>A newer app version is ready.</span>
-        <button onclick="applySwUpdate()">Update Now</button>
+        <button type="button" onclick="applySwUpdate()">Update Now</button>
       </div>
 
-      <!-- LOADING & ALERT BANNER -->
+      <!-- LOADING & ERROR TOAST -->
       <div id="loadingBar" class="loading-bar hidden"><div class="loading-progress"></div></div>
       <div id="alertBanner" class="alert-banner hidden"></div>
 
@@ -155,7 +157,7 @@
         </section>
       </main>
 
-      <!-- TAB 2: EMPLOYEES -->
+      <!-- TAB 2: EMPLOYEES (Search, Sort, Pagination, Responsive Cards/Table, CRUD, CSV Export) -->
       <main id="tab-employees" class="tab-panel hidden">
         <div class="card">
           <div class="toolbar-mobile">
@@ -165,6 +167,7 @@
                 <option value="full_name">Sort: Name</option>
                 <option value="monthly_salary">Sort: Salary</option>
                 <option value="performance_score">Sort: KPI Score</option>
+                <option value="hire_date">Sort: Hire Date</option>
               </select>
               <select id="sortDir" onchange="loadEmployeesPage(1)">
                 <option value="asc">Asc ↑</option>
@@ -174,6 +177,7 @@
             </div>
           </div>
 
+          <!-- Desktop Table / Mobile Card List -->
           <div class="table-responsive">
             <table class="emp-table">
               <thead>
@@ -194,10 +198,11 @@
             </table>
           </div>
 
+          <!-- Touch-Friendly Pagination -->
           <div class="pagination-bar">
-            <button id="prevPageBtn" class="btn-page" onclick="changePage(-1)">← Prev</button>
+            <button type="button" id="prevPageBtn" class="btn-page" onclick="changePage(-1)">← Prev</button>
             <span id="pageIndicator" class="page-info">Page 1 of 1</span>
-            <button id="nextPageBtn" class="btn-page" onclick="changePage(1)">Next →</button>
+            <button type="button" id="nextPageBtn" class="btn-page" onclick="changePage(1)">Next →</button>
           </div>
         </div>
       </main>
@@ -218,7 +223,7 @@
         <div class="card">
           <div class="card-header-flex">
             <h2>Business Process &amp; CAPEX Optimization Initiatives</h2>
-            <span id="projectCountBadge" class="status-badge badge-active">0 Active</span>
+            <span id="projectCountBadge" class="status-badge badge-active">0 Initiatives</span>
           </div>
           <div id="projectsTrackerList" class="projects-list">
             <div class="empty-cell">Loading optimization projects...</div>
@@ -237,33 +242,33 @@
       </main>
     </div>
 
-    <!-- MOBILE BOTTOM NAVIGATION BAR -->
+    <!-- MOBILE BOTTOM NAVIGATION BAR (Safe-Area Bottom Aware) -->
     <nav class="bottom-nav" aria-label="Mobile Navigation">
-      <button class="bottom-btn active" data-tab="overview" onclick="switchTab('overview')">
+      <button type="button" class="bottom-btn active" data-tab="overview" onclick="switchTab('overview')">
         <span class="b-icon">📊</span>
         <span class="b-label">Overview</span>
       </button>
-      <button class="bottom-btn" data-tab="employees" onclick="switchTab('employees')">
+      <button type="button" class="bottom-btn" data-tab="employees" onclick="switchTab('employees')">
         <span class="b-icon">👥</span>
         <span class="b-label">Employees</span>
       </button>
-      <button class="bottom-btn" data-tab="analytics" onclick="switchTab('analytics')">
+      <button type="button" class="bottom-btn" data-tab="analytics" onclick="switchTab('analytics')">
         <span class="b-icon">📈</span>
         <span class="b-label">Analytics</span>
       </button>
-      <button class="bottom-btn" data-tab="activity" onclick="switchTab('activity')">
+      <button type="button" class="bottom-btn" data-tab="activity" onclick="switchTab('activity')">
         <span class="b-icon">🕒</span>
         <span class="b-label">Activity</span>
       </button>
     </nav>
   </div>
 
-  <!-- ADD / EDIT EMPLOYEE MODAL -->
+  <!-- ADD / EDIT EMPLOYEE MODAL (Mobile Bottom-Sheet on Phones, Centered on Desktop) -->
   <div id="employeeModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal-sheet">
       <div class="modal-header">
         <h3 id="modalTitle">Add Employee</h3>
-        <button class="btn-close" onclick="closeEmployeeModal()" aria-label="Close">✕</button>
+        <button type="button" class="btn-close" onclick="closeEmployeeModal()" aria-label="Close">✕</button>
       </div>
       <form id="employeeForm" onsubmit="handleSaveEmployee(event)">
         <input type="hidden" id="formEmpId">
@@ -298,6 +303,42 @@
         <div class="modal-footer">
           <button type="button" class="btn-secondary" onclick="closeEmployeeModal()">Cancel</button>
           <button type="submit" id="saveEmpBtn" class="btn-primary">Save Record</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- QUICK SHIFT & PRODUCTION LOG MODAL -->
+  <div id="productionModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h3>Log Shift / Production Update</h3>
+        <button type="button" class="btn-close" onclick="closeProductionModal()" aria-label="Close">✕</button>
+      </div>
+      <form id="productionForm" onsubmit="handleSaveProduction(event)">
+        <label for="prodUnitId">Plant / Division</label>
+        <select id="prodUnitId" required></select>
+
+        <div class="form-grid-2">
+          <div>
+            <label for="prodTons">Dispatched Volume (Tons)</label>
+            <input type="number" id="prodTons" required min="0" step="10" placeholder="e.g., 2500">
+          </div>
+          <div>
+            <label for="prodCo2">CO₂ Intensity (kg/t)</label>
+            <input type="number" id="prodCo2" required min="0" step="1" value="580">
+          </div>
+        </div>
+
+        <label for="prodRevenue">Shift / Period Revenue (EGP)</label>
+        <input type="number" id="prodRevenue" required min="0" step="1000" placeholder="e.g., 4500000">
+
+        <label for="prodNote">Process / Shift Observation Note</label>
+        <input type="text" id="prodNote" placeholder="e.g., Kiln line optimization steady, zero safety incidents">
+
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeProductionModal()">Cancel</button>
+          <button type="submit" id="saveProdBtn" class="btn-primary">Submit Log</button>
         </div>
       </form>
     </div>

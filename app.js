@@ -1,5 +1,7 @@
 /**
  * Holcim Egypt Management & Operations Dashboard — External PWA Client (app.js)
+ * Fully wired to index.html IDs, Google Charts, PWA Install/SW, CSV Export,
+ * Executive Summary Clipboard Copy, Shift Production Logging, and Code.gs /exec bridge.
  */
 
 const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
@@ -10,8 +12,8 @@ const state = {
   deptId: 'ALL',
   empPage: 1,
   empTotalPages: 1,
-  dashboardCache: new Map(),
-  empListCache: null,
+  dashboardCache: new Map(), // unitId -> dashboard payload
+  empListCache: null,       // full employee list for instant search/sort/page/export
   empListVersion: null,
   activityCache: null,
   activityVersion: null,
@@ -215,7 +217,7 @@ function handleFilterChange() {
   loadDashboard(false);
 }
 
-// -------------------- Dashboard KPIs, Projects & Charts --------------------
+// -------------------- Dashboard KPIs, Projects & Google Charts --------------------
 
 function applyDashboardData(data, selectedDept) {
   showAlert('');
@@ -244,7 +246,6 @@ function applyDashboardData(data, selectedDept) {
   setTxt('kpiPayroll', formatNumber(kpis.monthlyPayrollEgp));
   setTxt('kpiAvgScore', `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`);
 
-  // Operational & Sustainability KPIs
   setTxt('kpiDispatched', `${formatNumber(kpis.totalDispatchedTons)} t`);
   setTxt('kpiRevenue', formatCompactEgp(kpis.totalRevenueEgp));
   setTxt('kpiCo2', `${formatNumber(kpis.avgCo2)} kg/t`);
@@ -507,7 +508,7 @@ async function exportEmployeesCsv() {
   showAlert(`Exported ${filtered.length} employee records to CSV.`, false);
 }
 
-// -------------------- Employee Directory --------------------
+// -------------------- Employee Directory (Search, Sort, Pagination, CRUD) --------------------
 
 function getFilteredSortedEmployees(allEmployees, returnAll = false) {
   const searchInput = document.getElementById('searchInput');
@@ -741,6 +742,72 @@ async function deleteEmployeeRecord(empId) {
   }
 }
 
+// -------------------- Quick Shift & Production Log Modal --------------------
+
+function openProductionModal() {
+  const modal = document.getElementById('productionModal');
+  const form = document.getElementById('productionForm');
+  const prodUnitSelect = document.getElementById('prodUnitId');
+  if (!modal || !form) return;
+
+  form.reset();
+  document.getElementById('prodCo2').value = '580';
+
+  if (prodUnitSelect) {
+    const dash = state.dashboardCache.get(state.deptId) || state.dashboardCache.values().next().value;
+    const units = (dash && dash.units) || [];
+    prodUnitSelect.innerHTML = '';
+    units.forEach(u => {
+      const opt = document.createElement('option');
+      opt.value = u.unit_id;
+      opt.textContent = u.unit_name;
+      prodUnitSelect.appendChild(opt);
+    });
+    if (state.deptId && state.deptId !== 'ALL' && units.some(u => u.unit_id === state.deptId)) {
+      prodUnitSelect.value = state.deptId;
+    }
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeProductionModal() {
+  const modal = document.getElementById('productionModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function handleSaveProduction(event) {
+  event.preventDefault();
+  const btn = document.getElementById('saveProdBtn');
+  if (btn) btn.disabled = true;
+  setLoading(true);
+
+  const payload = {
+    unit_id: document.getElementById('prodUnitId').value,
+    dispatched_tons: Number(document.getElementById('prodTons').value || 0),
+    co2_intensity: Number(document.getElementById('prodCo2').value || 0),
+    revenue_egp: Number(document.getElementById('prodRevenue').value || 0),
+    shift_note: document.getElementById('prodNote').value.trim(),
+    entry_date: new Date().toISOString()
+  };
+
+  try {
+    const msg = await callGasApi('logProductionUpdate', payload);
+    closeProductionModal();
+    invalidateClientCaches();
+    showAlert(typeof msg === 'string' ? msg : 'Production update logged.', false);
+    await loadDashboard(true);
+    if (state.activeTab === 'activity') {
+      await loadRecentActivity(true);
+    }
+  } catch (err) {
+    showAlert(err.message || String(err), true);
+  } finally {
+    if (btn) btn.disabled = false;
+    setLoading(false);
+  }
+}
+
 // -------------------- Activity Log --------------------
 
 function renderActivityFeed(logs = []) {
@@ -838,6 +905,9 @@ window.openEmployeeModal = openEmployeeModal;
 window.closeEmployeeModal = closeEmployeeModal;
 window.handleSaveEmployee = handleSaveEmployee;
 window.deleteEmployeeRecord = deleteEmployeeRecord;
+window.openProductionModal = openProductionModal;
+window.closeProductionModal = closeProductionModal;
+window.handleSaveProduction = handleSaveProduction;
 window.handleFilterChange = handleFilterChange;
 window.debouncedSearch = debouncedSearch;
 window.loadEmployeesPage = loadEmployeesPage;
