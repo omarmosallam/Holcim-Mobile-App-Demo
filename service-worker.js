@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'holcim-pwa-shell-v1';
+const CACHE_VERSION = 'holcim-pwa-shell-v2';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -10,10 +10,23 @@ const STATIC_ASSETS = [
   './icons/icon-512.png'
 ];
 
-// 1. Install: Pre-cache static shell assets ONLY
+// 1. Install: Pre-cache static shell assets without failing on a single missing optional file
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches.open(CACHE_VERSION).then(async (cache) => {
+      await Promise.all(
+        STATIC_ASSETS.map(async (asset) => {
+          try {
+            const res = await fetch(asset, { cache: 'no-cache' });
+            if (res && res.ok) {
+              await cache.put(asset, res.clone());
+            }
+          } catch (_) {
+            // Skip unavailable optional asset rather than aborting SW install
+          }
+        })
+      );
+    })
   );
   self.skipWaiting();
 });
@@ -62,11 +75,15 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((networkRes) => {
-          const copy = networkRes.clone();
-          caches.open(CACHE_VERSION).then((cache) => cache.put('./index.html', copy));
+          if (networkRes && networkRes.ok) {
+            const copy = networkRes.clone();
+            caches.open(CACHE_VERSION).then((cache) => cache.put('./index.html', copy));
+          }
           return networkRes;
         })
-        .catch(() => caches.match('./index.html').then((cached) => cached || caches.match('./offline.html')))
+        .catch(() =>
+          caches.match('./index.html').then((cached) => cached || caches.match('./offline.html'))
+        )
     );
     return;
   }
@@ -85,7 +102,7 @@ self.addEventListener('fetch', (event) => {
           })
           .catch(() => cachedRes);
 
-        return cachedRes || networkFetch;
+        return cachedRes || networkFetch.then((res) => res || Response.error());
       })
     );
   }
