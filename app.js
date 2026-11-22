@@ -1,6 +1,6 @@
 /**
  * Holcim Egypt Management & KPI Dashboard — External PWA Client (app.js)
- * Connects to Google Apps Script Web App (/exec) via JSON POST bridge.
+ * Fully wired to index.html IDs, Google Charts, PWA Install/SW, and Code.gs /exec bridge.
  */
 
 const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
@@ -8,29 +8,43 @@ const PAGE_SIZE = 10;
 
 const state = {
   activeTab: 'overview',
-  unitId: 'ALL',
+  deptId: 'ALL',
   empPage: 1,
-  empSearch: '',
-  empSortBy: 'full_name',
-  empSortDir: 'asc',
-  dashboardCache: new Map(), // key: unitId -> dashboard response object
-  empListCache: null,       // array of all employees for fast instant search/sort/page
-  empListVersion: null,     // tracks dbVersion from dashboard response
-  activityCache: null,      // cached recent activity rows
+  empTotalPages: 1,
+  dashboardCache: new Map(), // unitId -> dashboard payload
+  empListCache: null,       // full employee list for instant search/sort/page
+  empListVersion: null,
+  activityCache: null,
   activityVersion: null,
-  inFlight: new Set()
+  inFlight: new Set(),
+  googleChartsReady: false,
+  deferredPrompt: null,
+  swRegistration: null
 };
+
+const TAB_TITLES = {
+  overview: 'Dashboard Overview',
+  employees: 'Employee Directory',
+  analytics: 'Workforce & Budget Analytics',
+  activity: 'Recent Activity Log'
+};
+
+// -------------------- Google Charts Loader --------------------
+
+if (window.google && window.google.charts) {
+  google.charts.load('current', { packages: ['corechart'] });
+  google.charts.setOnLoadCallback(() => {
+    state.googleChartsReady = true;
+    const current = state.dashboardCache.get(state.deptId);
+    if (current) renderAllCharts(current);
+  });
+}
 
 // -------------------- API Bridge (`doPost`) --------------------
 
 async function callGasApi(action, payload = {}) {
-  if (!GAS_WEB_APP_URL || GAS_WEB_APP_URL.includes('YOUR_GAS_WEB_APP_EXEC_URL')) {
-    throw new Error('Please set GAS_WEB_APP_URL in app.js to your deployed /exec URL.');
-  }
-
   const res = await fetch(GAS_WEB_APP_URL, {
     method: 'POST',
-    // text/plain avoids CORS preflight issues with Google Apps Script Web Apps
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action, payload }),
     redirect: 'follow'
@@ -49,74 +63,41 @@ async function callGasApi(action, payload = {}) {
 
 // -------------------- UI Helpers --------------------
 
-function showToast(message, isError = false) {
-  let toast = document.getElementById('holcimToast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'holcimToast';
-    toast.style.cssText = [
-      'position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:9999;',
-      'padding:10px 16px;border-radius:10px;font-size:13px;font-weight:500;',
-      'box-shadow:0 8px 24px rgba(15,23,42,0.22);transition:opacity 0.2s ease;max-width:90vw;'
-    ].join('');
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  toast.style.background = isError ? '#dc2626' : '#0f172a';
-  toast.style.color = '#ffffff';
-  toast.style.opacity = '1';
-
-  clearTimeout(showToast._timer);
-  showToast._timer = setTimeout(() => {
-    toast.style.opacity = '0';
-  }, 3000);
+function setLoading(isLoading) {
+  const bar = document.getElementById('loadingBar');
+  if (bar) bar.classList.toggle('hidden', !isLoading);
 }
 
-function showErrorBanner(message) {
-  let banner = document.getElementById('errorBanner');
-  if (!banner) {
-    banner = document.createElement('div');
-    banner.id = 'errorBanner';
-    banner.style.cssText = [
-      'background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;',
-      'padding:10px 14px;border-radius:10px;margin:10px 0;font-size:13px;display:none;'
-    ].join('');
-    const main = document.querySelector('main') || document.body;
-    main.prepend(banner);
-  }
+function showAlert(message, isError = true) {
+  const banner = document.getElementById('alertBanner');
+  if (!banner) return;
   if (!message) {
-    banner.style.display = 'none';
+    banner.classList.add('hidden');
     banner.textContent = '';
     return;
   }
   banner.textContent = message;
-  banner.style.display = 'block';
-}
+  banner.classList.toggle('error', isError);
+  banner.classList.toggle('success', !isError);
+  banner.classList.remove('hidden');
 
-function setLoading(isLoading) {
-  const loader = document.getElementById('loadingIndicator');
-  if (loader) {
-    loader.style.display = isLoading ? 'inline-flex' : 'none';
+  if (!isError) {
+    clearTimeout(showAlert._timer);
+    showAlert._timer = setTimeout(() => banner.classList.add('hidden'), 3200);
   }
-  document.querySelectorAll('[data-refresh-btn]').forEach(btn => {
-    btn.disabled = isLoading;
-  });
 }
 
-function setTextIfExists(id, text) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = text;
+function updateConnectionStatus() {
+  const pill = document.getElementById('connectionPill');
+  if (!pill) return;
+  const online = navigator.onLine;
+  pill.classList.toggle('online', online);
+  pill.classList.toggle('offline', !online);
+  pill.textContent = online ? '● Live Sheets Sync' : '● Offline Mode';
 }
 
 function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
-}
-
-function formatCompactEgp(n) {
-  const num = Number(n || 0);
-  if (Math.abs(num) >= 1e9) return `EGP ${(num / 1e9).toFixed(2)}B`;
-  if (Math.abs(num) >= 1e6) return `EGP ${(num / 1e6).toFixed(1)}M`;
-  return `EGP ${formatNumber(num)}`;
 }
 
 function invalidateClientCaches() {
@@ -127,89 +108,81 @@ function invalidateClientCaches() {
   state.activityVersion = null;
 }
 
-// -------------------- Navigation & Filter Events --------------------
-
-function normalizeTabName(raw) {
-  const clean = String(raw || 'overview').toLowerCase().trim();
-  if (clean.includes('employee')) return 'employees';
-  if (clean.includes('analytic')) return 'analytics';
-  if (clean.includes('activity')) return 'activity';
-  return 'overview';
-}
+// -------------------- Tab Navigation --------------------
 
 function switchTab(tabName) {
-  const target = normalizeTabName(tabName);
+  const target = ['overview', 'employees', 'analytics', 'activity'].includes(tabName)
+    ? tabName
+    : 'overview';
   state.activeTab = target;
 
-  const sections = document.querySelectorAll('[data-tab-section]');
-  if (sections.length > 0) {
-    sections.forEach(el => {
-      const secName = normalizeTabName(el.getAttribute('data-tab-section'));
-      const match = secName === target;
-      el.classList.toggle('hidden', !match);
-      el.style.display = match ? '' : 'none';
-    });
-  } else {
-    ['overview', 'employees', 'analytics', 'activity'].forEach(name => {
-      const sec =
-        document.getElementById(`${name}Section`) ||
-        document.getElementById(`section-${name}`) ||
-        document.getElementById(`tab-${name}`);
-      if (sec) {
-        const match = name === target;
-        sec.classList.toggle('hidden', !match);
-        sec.style.display = match ? '' : 'none';
-      }
-    });
-  }
+  // Toggle <main id="tab-..." class="tab-panel">
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.toggle('hidden', panel.id !== `tab-${target}`);
+  });
 
-  const navButtons = document.querySelectorAll('[data-nav-tab], .nav-item');
-  navButtons.forEach(btn => {
-    const attrTab = btn.getAttribute('data-nav-tab');
-    const inferred = normalizeTabName(attrTab || btn.textContent);
-    const isActive = inferred === target;
+  // Highlight active buttons in both desktop sidebar & mobile bottom nav
+  document.querySelectorAll('[data-tab]').forEach(btn => {
+    const isActive = btn.getAttribute('data-tab') === target;
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-current', isActive ? 'page' : 'false');
   });
 
+  const titleEl = document.getElementById('headerTitle');
+  if (titleEl) titleEl.textContent = TAB_TITLES[target] || 'Dashboard Overview';
+
   if (target === 'employees') {
     loadEmployeesPage(state.empPage);
+  } else if (target === 'analytics') {
+    const current = state.dashboardCache.get(state.deptId);
+    if (current) renderAllCharts(current);
   } else if (target === 'activity') {
     loadRecentActivity();
   }
 }
 
-function populateUnitSelects(units, selectedUnitId) {
-  const selects = document.querySelectorAll('#unitFilter, #deptFilter, [data-unit-select]');
-  selects.forEach(select => {
-    const isFilter = select.id === 'unitFilter' || select.id === 'deptFilter';
-    const currentVal = isFilter ? selectedUnitId : (select.value || (units[0] && units[0].unit_id) || '');
-    select.innerHTML = '';
+// -------------------- Filter & Dropdowns --------------------
 
-    if (isFilter) {
-      const allOpt = document.createElement('option');
-      allOpt.value = 'ALL';
-      allOpt.textContent = 'All Departments & Divisions';
-      select.appendChild(allOpt);
-    }
-
-    (units || []).forEach(u => {
+function populateDepartmentDropdowns(units = [], selectedDept = 'ALL') {
+  const deptFilter = document.getElementById('deptFilter');
+  if (deptFilter) {
+    deptFilter.innerHTML = '<option value="ALL">All Departments &amp; Divisions</option>';
+    units.forEach(u => {
       const opt = document.createElement('option');
       opt.value = u.unit_id;
       opt.textContent = u.unit_name;
-      select.appendChild(opt);
+      deptFilter.appendChild(opt);
     });
+    deptFilter.value = selectedDept || 'ALL';
+  }
 
-    if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
-      select.value = currentVal;
+  const formDeptId = document.getElementById('formDeptId');
+  if (formDeptId) {
+    const prev = formDeptId.value;
+    formDeptId.innerHTML = '';
+    units.forEach(u => {
+      const opt = document.createElement('option');
+      opt.value = u.unit_id;
+      opt.textContent = u.unit_name;
+      formDeptId.appendChild(opt);
+    });
+    if (prev && units.some(u => u.unit_id === prev)) {
+      formDeptId.value = prev;
     }
-  });
+  }
 }
 
-// -------------------- Dashboard Rendering & Caching --------------------
+function handleFilterChange() {
+  const deptFilter = document.getElementById('deptFilter');
+  state.deptId = (deptFilter && deptFilter.value) || 'ALL';
+  state.empPage = 1;
+  loadDashboard(false);
+}
 
-function applyDashboardData(data, selectedUnit) {
-  showErrorBanner('');
+// -------------------- Dashboard KPIs & Google Charts --------------------
+
+function applyDashboardData(data, selectedDept) {
+  showAlert('');
 
   if (data.dbVersion && data.dbVersion !== state.empListVersion) {
     state.empListCache = null;
@@ -220,138 +193,187 @@ function applyDashboardData(data, selectedUnit) {
     state.activityVersion = data.dbVersion;
   }
 
-  const sheetLink = document.getElementById('openSheetLink');
-  if (sheetLink && data.sheetUrl) {
-    sheetLink.href = data.sheetUrl;
+  populateDepartmentDropdowns(data.units || [], selectedDept);
+
+  const kpis = data.kpis || {};
+  const setTxt = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  };
+
+  setTxt('kpiTotalEmp', formatNumber(kpis.headcount));
+  setTxt('kpiActiveEmp', `${formatNumber(kpis.activeEmployees ?? kpis.headcount)} active staff`);
+  setTxt('kpiTotalDepts', formatNumber((data.units || []).length || 5));
+  setTxt('kpiPayroll', formatNumber(kpis.monthlyPayrollEgp));
+  setTxt('kpiAvgScore', `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`);
+
+  renderAllCharts(data);
+}
+
+function renderAllCharts(data) {
+  if (!state.googleChartsReady || !window.google || !google.visualization || !data) return;
+
+  const units = data.units || [];
+  const employees = (data.tables && data.tables.employees) || [];
+
+  // 1. Overview Chart 1: Headcount by Department
+  const hcEl = document.getElementById('chartDeptHeadcount');
+  if (hcEl) {
+    const rows = [['Department', 'Headcount']];
+    units.forEach(u => {
+      const count = employees.filter(e => e.unit_id === u.unit_id).length;
+      if (state.deptId === 'ALL' || state.deptId === u.unit_id) {
+        rows.push([u.unit_name, count]);
+      }
+    });
+    if (rows.length === 1) rows.push(['No Data', 0]);
+
+    const chart = new google.visualization.ColumnChart(hcEl);
+    chart.draw(google.visualization.arrayToDataTable(rows), {
+      legend: { position: 'none' },
+      colors: ['#0d9488'],
+      chartArea: { left: 45, top: 20, width: '85%', height: '70%' },
+      backgroundColor: 'transparent',
+      vAxis: { minValue: 0, format: '0' }
+    });
   }
 
-  populateUnitSelects(data.units, selectedUnit);
-  renderKpis(data.kpis);
-  renderCharts(data.charts);
-  renderSummaryTables(data);
-}
+  // 2. Overview Chart 2: Workforce Status Breakdown
+  const statusEl = document.getElementById('chartStatusPie');
+  if (statusEl) {
+    const counts = {};
+    employees.forEach(e => {
+      const st = e.status || 'Active';
+      counts[st] = (counts[st] || 0) + 1;
+    });
+    const rows = [['Status', 'Staff']];
+    Object.keys(counts).forEach(k => rows.push([k, counts[k]]));
+    if (rows.length === 1) rows.push(['Active', 0]);
 
-function renderKpis(kpis = {}) {
-  setTextIfExists('kpiTotalEmployees', formatNumber(kpis.headcount));
-  setTextIfExists('kpiDepartments', formatNumber(5));
-  setTextIfExists('kpiMonthlyPayroll', formatNumber(kpis.monthlyPayrollEgp));
-  setTextIfExists('kpiAvgScore', `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`);
-  setTextIfExists('kpiDispatchedTons', `${formatNumber(kpis.totalDispatchedTons)} t`);
-  setTextIfExists('kpiRevenueEgp', formatCompactEgp(kpis.totalRevenueEgp));
-  setTextIfExists('kpiCo2Intensity', `${formatNumber(kpis.avgCo2)} kg/t`);
-  setTextIfExists('kpiCapexProgress', `${formatNumber(kpis.avgProjectProgress)}%`);
-}
+    const chart = new google.visualization.PieChart(statusEl);
+    chart.draw(google.visualization.arrayToDataTable(rows), {
+      pieHole: 0.45,
+      colors: ['#0d9488', '#0284c7', '#d97706', '#64748b'],
+      chartArea: { left: 16, top: 16, width: '92%', height: '82%' },
+      backgroundColor: 'transparent'
+    });
+  }
 
-function renderCharts(charts = {}) {
-  const canvas = document.getElementById('headcountChart');
-  if (!canvas || !canvas.getContext) return;
-  const rows = (charts.capexByUnitChart || []).slice(1);
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width;
-  const h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
+  // 3. Analytics Chart 1: Department Budget vs. Annualized Payroll
+  const budgetEl = document.getElementById('chartBudgetCompare');
+  if (budgetEl && budgetEl.offsetParent !== null) {
+    const rows = [['Department', 'Annual Budget (EGP)', 'Annualized Payroll (EGP)']];
+    units.forEach(u => {
+      if (state.deptId === 'ALL' || state.deptId === u.unit_id) {
+        const annualPayroll = employees
+          .filter(e => e.unit_id === u.unit_id)
+          .reduce((s, e) => s + Number(e.monthly_salary_egp || 0) * 12, 0);
+        rows.push([u.unit_name, Number(u.annual_budget_egp || 0), annualPayroll]);
+      }
+    });
+    if (rows.length === 1) rows.push(['No Data', 0, 0]);
 
-  if (!rows.length) return;
-  const maxVal = Math.max(1, ...rows.flatMap(r => [Number(r[1] || 0), Number(r[2] || 0)]));
-  const groupW = w / rows.length;
-  const barW = Math.min(22, groupW * 0.28);
+    const chart = new google.visualization.ColumnChart(budgetEl);
+    chart.draw(google.visualization.arrayToDataTable(rows), {
+      colors: ['#0f172a', '#0d9488'],
+      legend: { position: 'top' },
+      chartArea: { left: 65, top: 36, width: '82%', height: '65%' },
+      backgroundColor: 'transparent'
+    });
+  }
 
-  rows.forEach((r, idx) => {
-    const xBase = idx * groupW + groupW * 0.2;
-    const allocH = (Number(r[1] || 0) / maxVal) * (h - 36);
-    const spentH = (Number(r[2] || 0) / maxVal) * (h - 36);
+  // 4. Analytics Chart 2: Average Performance Score by Division
+  const perfEl = document.getElementById('chartPerfCompare');
+  if (perfEl && perfEl.offsetParent !== null) {
+    const rows = [['Department', 'Avg KPI Score']];
+    units.forEach(u => {
+      if (state.deptId === 'ALL' || state.deptId === u.unit_id) {
+        const uEmps = employees.filter(e => e.unit_id === u.unit_id);
+        const avg = uEmps.length
+          ? Number((uEmps.reduce((s, e) => s + Number(e.performance_score || 0), 0) / uEmps.length).toFixed(2))
+          : 0;
+        rows.push([u.unit_name, avg]);
+      }
+    });
+    if (rows.length === 1) rows.push(['No Data', 0]);
 
-    ctx.fillStyle = '#0f294a';
-    ctx.fillRect(xBase, h - 22 - allocH, barW, allocH);
-
-    ctx.fillStyle = '#0ea5e9';
-    ctx.fillRect(xBase + barW + 4, h - 22 - spentH, barW, spentH);
-
-    ctx.fillStyle = '#475569';
-    ctx.font = '10px sans-serif';
-    const label = String(r[0] || '').split(' ')[0];
-    ctx.fillText(label, xBase, h - 8);
-  });
-}
-
-function renderSummaryTables(data) {
-  const projBody = document.getElementById('projectsTableBody');
-  if (projBody && data.tables && Array.isArray(data.tables.projects)) {
-    projBody.innerHTML = data.tables.projects.map(p => `
-      <tr>
-        <td>${p.proj_id}</td>
-        <td>${p.project_name}</td>
-        <td>${p.unit_name}</td>
-        <td>${p.completion_pct}%</td>
-        <td>${p.status}</td>
-      </tr>
-    `).join('');
+    const chart = new google.visualization.BarChart(perfEl);
+    chart.draw(google.visualization.arrayToDataTable(rows), {
+      colors: ['#0284c7'],
+      legend: { position: 'none' },
+      hAxis: { minValue: 0, maxValue: 5 },
+      chartArea: { left: 130, top: 20, width: '65%', height: '74%' },
+      backgroundColor: 'transparent'
+    });
   }
 }
 
 async function loadDashboard(forceRefresh = false) {
-  const selectedUnit = state.unitId || 'ALL';
+  const selectedDept = state.deptId || 'ALL';
 
-  if (!forceRefresh && state.dashboardCache.has(selectedUnit)) {
-    applyDashboardData(state.dashboardCache.get(selectedUnit), selectedUnit);
-    if (state.activeTab === 'employees') {
-      loadEmployeesPage(state.empPage);
-    } else if (state.activeTab === 'activity') {
-      loadRecentActivity();
-    }
+  if (!forceRefresh && state.dashboardCache.has(selectedDept)) {
+    applyDashboardData(state.dashboardCache.get(selectedDept), selectedDept);
+    if (state.activeTab === 'employees') loadEmployeesPage(state.empPage);
+    if (state.activeTab === 'activity') loadRecentActivity();
     return;
   }
 
-  const reqKey = `dash:${selectedUnit}`;
+  const reqKey = `dash:${selectedDept}`;
   if (state.inFlight.has(reqKey)) return;
 
   state.inFlight.add(reqKey);
   setLoading(true);
 
   try {
-    const data = await callGasApi('getDashboardData', { unitId: selectedUnit });
-    state.dashboardCache.set(selectedUnit, data);
-    applyDashboardData(data, selectedUnit);
+    const data = await callGasApi('getDashboardData', { unitId: selectedDept });
+    state.dashboardCache.set(selectedDept, data);
+    applyDashboardData(data, selectedDept);
 
-    if (state.activeTab === 'employees') {
-      await loadEmployeesPage(state.empPage, forceRefresh);
-    } else if (state.activeTab === 'activity') {
-      await loadRecentActivity(forceRefresh);
-    }
+    if (state.activeTab === 'employees') await loadEmployeesPage(state.empPage, forceRefresh);
+    if (state.activeTab === 'activity') await loadRecentActivity(forceRefresh);
   } catch (err) {
-    showErrorBanner(err.message || String(err));
-    showToast(err.message || 'Failed to load dashboard', true);
+    showAlert(err.message || String(err), true);
   } finally {
     state.inFlight.delete(reqKey);
     setLoading(false);
   }
 }
 
-// -------------------- Employees Search, Sort, Pagination & CRUD --------------------
+function refreshAll(forceRefresh = true) {
+  invalidateClientCaches();
+  return loadDashboard(forceRefresh);
+}
 
-function filterAndPaginateLocalEmployees(allEmployees) {
-  const search = String(state.empSearch || '').toLowerCase().trim();
-  const deptId = state.unitId || 'ALL';
-  const sortBy = state.empSortBy || 'full_name';
-  const sortDir = state.empSortDir === 'desc' ? -1 : 1;
+// -------------------- Employee Directory (Search, Sort, Pagination, CRUD) --------------------
+
+function getFilteredSortedEmployees(allEmployees) {
+  const searchInput = document.getElementById('searchInput');
+  const sortFieldEl = document.getElementById('sortField');
+  const sortDirEl = document.getElementById('sortDir');
+
+  const query = String((searchInput && searchInput.value) || '').toLowerCase().trim();
+  const sortFieldRaw = (sortFieldEl && sortFieldEl.value) || 'full_name';
+  const sortField = sortFieldRaw === 'monthly_salary' ? 'monthly_salary_egp' : sortFieldRaw;
+  const sortDir = (sortDirEl && sortDirEl.value) === 'desc' ? -1 : 1;
 
   let list = allEmployees.slice();
 
-  if (deptId && deptId !== 'ALL') {
-    list = list.filter(e => e.unit_id === deptId);
+  if (state.deptId && state.deptId !== 'ALL') {
+    list = list.filter(e => e.unit_id === state.deptId);
   }
-  if (search) {
+
+  if (query) {
     list = list.filter(e =>
-      String(e.emp_id || '').toLowerCase().includes(search) ||
-      String(e.full_name || '').toLowerCase().includes(search) ||
-      String(e.role || '').toLowerCase().includes(search) ||
-      String(e.unit_name || '').toLowerCase().includes(search)
+      String(e.emp_id || '').toLowerCase().includes(query) ||
+      String(e.full_name || '').toLowerCase().includes(query) ||
+      String(e.role || '').toLowerCase().includes(query) ||
+      String(e.unit_name || '').toLowerCase().includes(query)
     );
   }
 
   list.sort((a, b) => {
-    const valA = a[sortBy];
-    const valB = b[sortBy];
+    const valA = a[sortField];
+    const valB = b[sortField];
     if (typeof valA === 'number' && typeof valB === 'number') {
       return (valA - valB) * sortDir;
     }
@@ -366,63 +388,66 @@ function filterAndPaginateLocalEmployees(allEmployees) {
   return {
     items: list.slice(start, start + PAGE_SIZE),
     page: safePage,
-    pageSize: PAGE_SIZE,
     total,
     totalPages
   };
 }
 
-function renderEmployeesPage(pageData) {
+function renderEmployeesTable(pageData) {
   state.empPage = pageData.page;
-  const container = document.getElementById('employeesListContainer');
-  const pageInfo = document.getElementById('empPageInfo');
-  const prevBtn = document.getElementById('empPrevBtn');
-  const nextBtn = document.getElementById('empNextBtn');
+  state.empTotalPages = pageData.totalPages;
 
-  if (pageInfo) {
-    pageInfo.textContent = `Page ${pageData.page} of ${pageData.totalPages} (${pageData.total})`;
-  }
+  const tbody = document.getElementById('employeeListBody');
+  const indicator = document.getElementById('pageIndicator');
+  const prevBtn = document.getElementById('prevPageBtn');
+  const nextBtn = document.getElementById('nextPageBtn');
+
+  if (indicator) indicator.textContent = `Page ${pageData.page} of ${pageData.totalPages}`;
   if (prevBtn) prevBtn.disabled = pageData.page <= 1;
   if (nextBtn) nextBtn.disabled = pageData.page >= pageData.totalPages;
 
-  if (!container) return;
+  if (!tbody) return;
 
   if (!pageData.items.length) {
-    container.innerHTML = '<div class="empty-state">No matching employees found.</div>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No matching employees found.</td></tr>';
     return;
   }
 
-  container.innerHTML = pageData.items.map(emp => `
-    <div class="employee-card" data-emp-id="${emp.emp_id}">
-      <div class="emp-main">
-        <strong>${emp.full_name}</strong> <span class="emp-id">(${emp.emp_id})</span>
-        <div class="emp-role">${emp.role} • ${emp.unit_name}</div>
-      </div>
-      <div class="emp-meta">
-        <span>EGP ${formatNumber(emp.monthly_salary_egp)}/mo</span>
-        <span>KPI: ${Number(emp.performance_score || 0).toFixed(1)}</span>
-        <span>${emp.status || 'Active'}</span>
-      </div>
-      <div class="emp-actions">
-        <button type="button" onclick="openEditEmployeeModal('${emp.emp_id}')">Edit</button>
-        <button type="button" onclick="handleDeleteEmployee('${emp.emp_id}')">Delete</button>
-      </div>
-    </div>
-  `).join('');
+  tbody.innerHTML = pageData.items.map(emp => {
+    const statusClass =
+      emp.status === 'Active' ? 'badge-active' :
+      emp.status === 'On Leave' ? 'badge-leave' : 'badge-inactive';
+
+    return `
+      <tr>
+        <td data-label="ID"><strong>${emp.emp_id}</strong></td>
+        <td data-label="Employee">${emp.full_name}</td>
+        <td data-label="Role">${emp.role}</td>
+        <td data-label="Department">${emp.unit_name}</td>
+        <td data-label="Salary">EGP ${formatNumber(emp.monthly_salary_egp)}</td>
+        <td data-label="KPI">${Number(emp.performance_score || 0).toFixed(1)}</td>
+        <td data-label="Status"><span class="status-badge ${statusClass}">${emp.status || 'Active'}</span></td>
+        <td data-label="Actions" class="action-cell">
+          <button type="button" class="btn-sm-edit" onclick="openEmployeeModal('${emp.emp_id}')">Edit</button>
+          <button type="button" class="btn-sm-del" onclick="deleteEmployeeRecord('${emp.emp_id}')">Delete</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 async function loadEmployeesPage(page = 1, forceRefresh = false) {
   state.empPage = Math.max(1, Number(page || 1));
-  showErrorBanner('');
+  showAlert('');
 
   if (!forceRefresh && Array.isArray(state.empListCache)) {
-    renderEmployeesPage(filterAndPaginateLocalEmployees(state.empListCache));
+    renderEmployeesTable(getFilteredSortedEmployees(state.empListCache));
     return;
   }
 
-  const container = document.getElementById('employeesListContainer');
-  if (container && !state.empListCache) {
-    container.innerHTML = '<div class="loading-state">Loading employees...</div>';
+  const tbody = document.getElementById('employeeListBody');
+  if (tbody && !state.empListCache) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">Loading employees...</td></tr>';
   }
 
   const reqKey = 'empList';
@@ -430,101 +455,125 @@ async function loadEmployeesPage(page = 1, forceRefresh = false) {
   state.inFlight.add(reqKey);
 
   try {
-    const allEmployees = await callGasApi('getAllEmployees');
-    state.empListCache = Array.isArray(allEmployees) ? allEmployees : [];
-    renderEmployeesPage(filterAndPaginateLocalEmployees(state.empListCache));
+    const all = await callGasApi('getAllEmployees');
+    state.empListCache = Array.isArray(all) ? all : [];
+    renderEmployeesTable(getFilteredSortedEmployees(state.empListCache));
   } catch (err) {
-    showErrorBanner(err.message || String(err));
-    if (container) {
-      container.innerHTML = '<div class="error-state">Could not load employees.</div>';
+    showAlert(err.message || String(err), true);
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">Failed to load employees.</td></tr>';
     }
   } finally {
     state.inFlight.delete(reqKey);
   }
 }
 
-function handleEmployeeSearchInput(value) {
-  state.empSearch = value || '';
-  state.empPage = 1;
-  loadEmployeesPage(1);
+let searchTimer = null;
+function debouncedSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    state.empPage = 1;
+    loadEmployeesPage(1);
+  }, 180);
 }
 
-function handleEmployeeSortChange(sortBy, sortDir) {
-  if (sortBy) state.empSortBy = sortBy;
-  if (sortDir) state.empSortDir = sortDir;
-  state.empPage = 1;
-  loadEmployeesPage(1);
-}
-
-async function handleAddEmployee(payload) {
-  setLoading(true);
-  try {
-    const msg = await callGasApi('addEmployee', payload);
-    invalidateClientCaches();
-    showToast(typeof msg === 'string' ? msg : 'Employee added.');
-    window.closeEmployeeModal();
-    await loadDashboard(true);
-    await loadEmployeesPage(1, true);
-  } catch (err) {
-    showToast(err.message || 'Failed to add employee', true);
-  } finally {
-    setLoading(false);
+function changePage(delta) {
+  const next = state.empPage + Number(delta || 0);
+  if (next >= 1 && next <= state.empTotalPages) {
+    loadEmployeesPage(next);
   }
 }
 
-function openEditEmployeeModal(empId) {
-  const emp = (state.empListCache || []).find(e => String(e.emp_id) === String(empId));
-  if (!emp) {
-    showToast('Employee record not found in memory. Refreshing...', true);
-    loadEmployeesPage(state.empPage, true);
-    return;
+// -------------------- Add / Edit / Delete Employee Modal --------------------
+
+function openEmployeeModal(empId = null) {
+  const modal = document.getElementById('employeeModal');
+  const title = document.getElementById('modalTitle');
+  const form = document.getElementById('employeeForm');
+  if (!modal || !form) return;
+
+  form.reset();
+  document.getElementById('formEmpId').value = '';
+
+  // Ensure department dropdown inside modal has options
+  const dash = state.dashboardCache.get(state.deptId) || state.dashboardCache.values().next().value;
+  if (dash && dash.units) {
+    populateDepartmentDropdowns(dash.units, state.deptId);
   }
-  const modal = document.getElementById('editEmployeeModal');
-  if (!modal) return;
-  const setVal = (id, v) => {
-    const el = document.getElementById(id);
-    if (el) el.value = v ?? '';
-  };
-  setVal('editEmpId', emp.emp_id);
-  setVal('editFullName', emp.full_name);
-  setVal('editRole', emp.role);
-  setVal('editUnitId', emp.unit_id);
-  setVal('editSalary', emp.monthly_salary_egp);
-  setVal('editShiftType', emp.shift_type || 'Day');
-  setVal('editSafetyCert', emp.safety_certified || 'Yes');
-  setVal('editPerfScore', emp.performance_score ?? 4.5);
-  setVal('editStatus', emp.status || 'Active');
+
+  if (empId) {
+    const emp = (state.empListCache || []).find(e => String(e.emp_id) === String(empId));
+    if (!emp) {
+      showAlert('Loading employee record...', false);
+      loadEmployeesPage(state.empPage, true).then(() => openEmployeeModal(empId));
+      return;
+    }
+    if (title) title.textContent = `Edit Employee (${emp.emp_id})`;
+    document.getElementById('formEmpId').value = emp.emp_id;
+    document.getElementById('formFullName').value = emp.full_name || '';
+    document.getElementById('formRole').value = emp.role || '';
+    document.getElementById('formDeptId').value = emp.unit_id || '';
+    document.getElementById('formSalary').value = emp.monthly_salary_egp || 0;
+    document.getElementById('formScore').value = emp.performance_score ?? 4.5;
+    document.getElementById('formStatus').value = emp.status || 'Active';
+  } else {
+    if (title) title.textContent = 'Add Employee';
+    document.getElementById('formScore').value = '4.5';
+    document.getElementById('formStatus').value = 'Active';
+  }
+
   modal.classList.remove('hidden');
-  modal.style.display = 'flex';
 }
 
-async function handleUpdateEmployee(payload) {
+function closeEmployeeModal() {
+  const modal = document.getElementById('employeeModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function handleSaveEmployee(event) {
+  event.preventDefault();
+  const saveBtn = document.getElementById('saveEmpBtn');
+  if (saveBtn) saveBtn.disabled = true;
   setLoading(true);
+
+  const empId = document.getElementById('formEmpId').value.trim();
+  const payload = {
+    emp_id: empId || undefined,
+    full_name: document.getElementById('formFullName').value.trim(),
+    role: document.getElementById('formRole').value.trim(),
+    unit_id: document.getElementById('formDeptId').value,
+    monthly_salary_egp: Number(document.getElementById('formSalary').value || 0),
+    performance_score: Number(document.getElementById('formScore').value || 4.5),
+    status: document.getElementById('formStatus').value || 'Active'
+  };
+
   try {
-    const msg = await callGasApi('updateEmployee', payload);
+    const action = empId ? 'updateEmployee' : 'addEmployee';
+    const msg = await callGasApi(action, payload);
+    closeEmployeeModal();
     invalidateClientCaches();
-    showToast(typeof msg === 'string' ? msg : 'Employee updated.');
-    window.closeEmployeeModal();
+    showAlert(typeof msg === 'string' ? msg : 'Saved successfully.', false);
     await loadDashboard(true);
-    await loadEmployeesPage(state.empPage, true);
+    await loadEmployeesPage(empId ? state.empPage : 1, true);
   } catch (err) {
-    showToast(err.message || 'Failed to update employee', true);
+    showAlert(err.message || String(err), true);
   } finally {
+    if (saveBtn) saveBtn.disabled = false;
     setLoading(false);
   }
 }
 
-async function handleDeleteEmployee(empId) {
+async function deleteEmployeeRecord(empId) {
   if (!confirm(`Delete employee ${empId}?`)) return;
   setLoading(true);
   try {
     const msg = await callGasApi('deleteEmployee', { empId });
     invalidateClientCaches();
-    showToast(typeof msg === 'string' ? msg : 'Employee deleted.');
+    showAlert(typeof msg === 'string' ? msg : 'Employee deleted.', false);
     await loadDashboard(true);
     await loadEmployeesPage(state.empPage, true);
   } catch (err) {
-    showToast(err.message || 'Failed to delete employee', true);
+    showAlert(err.message || String(err), true);
   } finally {
     setLoading(false);
   }
@@ -532,168 +581,118 @@ async function handleDeleteEmployee(empId) {
 
 // -------------------- Activity Log --------------------
 
-function renderActivityList(logs = []) {
-  const container = document.getElementById('activityListContainer');
-  if (!container) return;
+function renderActivityFeed(logs = []) {
+  const feed = document.getElementById('activityFeed');
+  if (!feed) return;
   if (!logs.length) {
-    container.innerHTML = '<div class="empty-state">No recent activity logged.</div>';
+    feed.innerHTML = '<li class="empty-cell">No activity recorded yet.</li>';
     return;
   }
-  container.innerHTML = logs.map(item => `
-    <div class="activity-item">
-      <strong>${item.action}</strong> — <span>${item.details}</span>
-      <div class="activity-time">${item.timestamp}</div>
-    </div>
+  feed.innerHTML = logs.map(item => `
+    <li class="activity-item">
+      <div class="act-top">
+        <strong>${item.action}</strong>
+        <span class="act-time">${item.timestamp}</span>
+      </div>
+      <div class="act-detail">${item.details}</div>
+    </li>
   `).join('');
 }
 
 async function loadRecentActivity(forceRefresh = false) {
   if (!forceRefresh && Array.isArray(state.activityCache)) {
-    renderActivityList(state.activityCache);
+    renderActivityFeed(state.activityCache);
     return;
   }
 
   try {
     const logs = await callGasApi('getRecentActivity');
     state.activityCache = Array.isArray(logs) ? logs : [];
-    renderActivityList(state.activityCache);
+    renderActivityFeed(state.activityCache);
   } catch (err) {
-    showToast(err.message || 'Failed to load activity log', true);
+    showAlert(err.message || String(err), true);
   }
 }
 
-// -------------------- Global Window Exports for HTML onclick Handlers --------------------
+// -------------------- PWA Install & Service Worker --------------------
 
-window.refreshAll = function refreshAll() {
-  invalidateClientCaches();
-  return loadDashboard(true);
-};
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  state.deferredPrompt = e;
+  document.getElementById('installBtnDesktop')?.classList.remove('hidden');
+  document.getElementById('installBtnMobile')?.classList.remove('hidden');
+});
 
-window.openEmployeeModal = function openEmployeeModal(empId = null) {
-  if (empId) {
-    return openEditEmployeeModal(empId);
+async function triggerInstallPrompt() {
+  if (!state.deferredPrompt) return;
+  state.deferredPrompt.prompt();
+  await state.deferredPrompt.userChoice;
+  state.deferredPrompt = null;
+  document.getElementById('installBtnDesktop')?.classList.add('hidden');
+  document.getElementById('installBtnMobile')?.classList.add('hidden');
+}
+
+function checkIosInstallBanner() {
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  const dismissed = localStorage.getItem('holcim_ios_banner_dismissed') === '1';
+  if (isIos && !isStandalone && !dismissed) {
+    document.getElementById('iosInstallBanner')?.classList.remove('hidden');
   }
-  const addModal =
-    document.getElementById('addEmployeeModal') ||
-    document.getElementById('employeeModal');
-  if (addModal) {
-    const form = addModal.querySelector('form');
-    if (form) form.reset();
-    addModal.classList.remove('hidden');
-    addModal.style.display = 'flex';
-    return;
-  }
-  const inlineForm = document.getElementById('addEmployeeForm');
-  if (inlineForm) {
-    switchTab('employees');
-    inlineForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const firstInput = inlineForm.querySelector('input, select');
-    if (firstInput) firstInput.focus();
-  } else {
-    showToast('Add Employee modal not found in index.html.', true);
-  }
-};
+}
 
-window.closeEmployeeModal = function closeEmployeeModal() {
-  ['addEmployeeModal', 'editEmployeeModal', 'employeeModal'].forEach(id => {
-    const modal = document.getElementById(id);
-    if (modal) {
-      modal.classList.add('hidden');
-      modal.style.display = 'none';
-    }
-  });
-};
+function dismissIosBanner() {
+  localStorage.setItem('holcim_ios_banner_dismissed', '1');
+  document.getElementById('iosInstallBanner')?.classList.add('hidden');
+}
 
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('./service-worker.js').then(reg => {
+    state.swRegistration = reg;
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if (!newWorker) return;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          document.getElementById('swUpdateBanner')?.classList.remove('hidden');
+        }
+      });
+    });
+  }).catch(() => {});
+}
+
+function applySwUpdate() {
+  if (state.swRegistration && state.swRegistration.waiting) {
+    state.swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+  }
+  window.location.reload();
+}
+
+// Expose all inline HTML onclick/onchange/oninput functions on window
 window.switchTab = switchTab;
-window.loadDashboard = loadDashboard;
+window.refreshAll = refreshAll;
+window.openEmployeeModal = openEmployeeModal;
+window.closeEmployeeModal = closeEmployeeModal;
+window.handleSaveEmployee = handleSaveEmployee;
+window.deleteEmployeeRecord = deleteEmployeeRecord;
+window.handleFilterChange = handleFilterChange;
+window.debouncedSearch = debouncedSearch;
 window.loadEmployeesPage = loadEmployeesPage;
-window.loadRecentActivity = loadRecentActivity;
-window.openEditEmployeeModal = openEditEmployeeModal;
-window.handleDeleteEmployee = handleDeleteEmployee;
+window.changePage = changePage;
+window.triggerInstallPrompt = triggerInstallPrompt;
+window.dismissIosBanner = dismissIosBanner;
+window.applySwUpdate = applySwUpdate;
 
-// -------------------- Initialization --------------------
+// -------------------- Boot --------------------
 
-function bindEvents() {
-  document.querySelectorAll('[data-nav-tab], .nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const explicitTab = btn.getAttribute('data-nav-tab');
-      switchTab(explicitTab || btn.textContent);
-    });
-  });
-
-  document.querySelectorAll('#unitFilter, #deptFilter').forEach(select => {
-    select.addEventListener('change', e => {
-      state.unitId = e.target.value || 'ALL';
-      state.empPage = 1;
-      loadDashboard(false);
-    });
-  });
-
-  document.querySelectorAll('[data-refresh-btn]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      invalidateClientCaches();
-      loadDashboard(true);
-    });
-  });
-
-  const searchInput = document.getElementById('empSearchInput');
-  if (searchInput) {
-    searchInput.addEventListener('input', e => handleEmployeeSearchInput(e.target.value));
-  }
-
-  const sortBySelect = document.getElementById('empSortBy');
-  const sortDirSelect = document.getElementById('empSortDir');
-  if (sortBySelect) {
-    sortBySelect.addEventListener('change', () => handleEmployeeSortChange(sortBySelect.value, null));
-  }
-  if (sortDirSelect) {
-    sortDirSelect.addEventListener('change', () => handleEmployeeSortChange(null, sortDirSelect.value));
-  }
-
-  const prevBtn = document.getElementById('empPrevBtn');
-  const nextBtn = document.getElementById('empNextBtn');
-  if (prevBtn) prevBtn.addEventListener('click', () => loadEmployeesPage(state.empPage - 1));
-  if (nextBtn) nextBtn.addEventListener('click', () => loadEmployeesPage(state.empPage + 1));
-
-  const addForm = document.getElementById('addEmployeeForm');
-  if (addForm) {
-    addForm.addEventListener('submit', e => {
-      e.preventDefault();
-      const fd = new FormData(addForm);
-      handleAddEmployee({
-        full_name: fd.get('full_name'),
-        role: fd.get('role'),
-        unit_id: fd.get('unit_id'),
-        monthly_salary_egp: Number(fd.get('monthly_salary_egp') || 0),
-        shift_type: fd.get('shift_type') || 'Day',
-        safety_certified: fd.get('safety_certified') || 'Yes',
-        performance_score: Number(fd.get('performance_score') || 4.5)
-      });
-      addForm.reset();
-    });
-  }
-
-  const editForm = document.getElementById('editEmployeeForm');
-  if (editForm) {
-    editForm.addEventListener('submit', e => {
-      e.preventDefault();
-      handleUpdateEmployee({
-        emp_id: document.getElementById('editEmpId').value,
-        full_name: document.getElementById('editFullName').value,
-        role: document.getElementById('editRole').value,
-        unit_id: document.getElementById('editUnitId').value,
-        monthly_salary_egp: Number(document.getElementById('editSalary').value || 0),
-        shift_type: document.getElementById('editShiftType').value,
-        safety_certified: document.getElementById('editSafetyCert').value,
-        performance_score: Number(document.getElementById('editPerfScore').value || 4.5),
-        status: document.getElementById('editStatus').value
-      });
-    });
-  }
-}
+window.addEventListener('online', updateConnectionStatus);
+window.addEventListener('offline', updateConnectionStatus);
 
 document.addEventListener('DOMContentLoaded', () => {
-  bindEvents();
-  switchTab(state.activeTab);
+  updateConnectionStatus();
+  checkIosInstallBanner();
+  registerServiceWorker();
+  switchTab('overview');
   loadDashboard(false);
 });
