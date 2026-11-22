@@ -18,6 +18,7 @@ const state = {
   activityVersion: null,
   inFlight: new Set(),
   googleChartsReady: false,
+  googleChartsLoading: false,
   deferredPrompt: null,
   swRegistration: null
 };
@@ -31,13 +32,34 @@ const TAB_TITLES = {
 
 // -------------------- Google Charts Loader --------------------
 
-if (window.google && window.google.charts) {
-  google.charts.load('current', { packages: ['corechart'] });
-  google.charts.setOnLoadCallback(() => {
-    state.googleChartsReady = true;
-    const current = state.dashboardCache.get(state.deptId);
-    if (current) renderAllCharts(current);
-  });
+function ensureGoogleChartsReady(onReady) {
+  if (window.google && window.google.charts && window.google.visualization && state.googleChartsReady) {
+    if (typeof onReady === 'function') onReady();
+    return;
+  }
+
+  if (!state.googleChartsLoading) {
+    state.googleChartsLoading = true;
+    let attempts = 0;
+
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (window.google && window.google.charts) {
+        clearInterval(timer);
+        google.charts.load('current', { packages: ['corechart'] });
+        google.charts.setOnLoadCallback(() => {
+          state.googleChartsReady = true;
+          state.googleChartsLoading = false;
+          const current = state.dashboardCache.get(state.deptId);
+          if (current) drawChartsNow(current);
+          if (typeof onReady === 'function') onReady();
+        });
+      } else if (attempts >= 60) {
+        clearInterval(timer);
+        state.googleChartsLoading = false;
+      }
+    }, 150);
+  }
 }
 
 // -------------------- API Bridge (`doPost`) --------------------
@@ -116,12 +138,10 @@ function switchTab(tabName) {
     : 'overview';
   state.activeTab = target;
 
-  // Toggle <main id="tab-..." class="tab-panel">
   document.querySelectorAll('.tab-panel').forEach(panel => {
     panel.classList.toggle('hidden', panel.id !== `tab-${target}`);
   });
 
-  // Highlight active buttons in both desktop sidebar & mobile bottom nav
   document.querySelectorAll('[data-tab]').forEach(btn => {
     const isActive = btn.getAttribute('data-tab') === target;
     btn.classList.toggle('active', isActive);
@@ -133,7 +153,7 @@ function switchTab(tabName) {
 
   if (target === 'employees') {
     loadEmployeesPage(state.empPage);
-  } else if (target === 'analytics') {
+  } else if (target === 'overview' || target === 'analytics') {
     const current = state.dashboardCache.get(state.deptId);
     if (current) renderAllCharts(current);
   } else if (target === 'activity') {
@@ -210,15 +230,15 @@ function applyDashboardData(data, selectedDept) {
   renderAllCharts(data);
 }
 
-function renderAllCharts(data) {
-  if (!state.googleChartsReady || !window.google || !google.visualization || !data) return;
+function drawChartsNow(data) {
+  if (!window.google || !google.visualization || !data) return;
 
   const units = data.units || [];
   const employees = (data.tables && data.tables.employees) || [];
 
   // 1. Overview Chart 1: Headcount by Department
   const hcEl = document.getElementById('chartDeptHeadcount');
-  if (hcEl) {
+  if (hcEl && hcEl.offsetParent !== null) {
     const rows = [['Department', 'Headcount']];
     units.forEach(u => {
       const count = employees.filter(e => e.unit_id === u.unit_id).length;
@@ -240,7 +260,7 @@ function renderAllCharts(data) {
 
   // 2. Overview Chart 2: Workforce Status Breakdown
   const statusEl = document.getElementById('chartStatusPie');
-  if (statusEl) {
+  if (statusEl && statusEl.offsetParent !== null) {
     const counts = {};
     employees.forEach(e => {
       const st = e.status || 'Active';
@@ -306,6 +326,11 @@ function renderAllCharts(data) {
       backgroundColor: 'transparent'
     });
   }
+}
+
+function renderAllCharts(data) {
+  if (!data) return;
+  ensureGoogleChartsReady(() => drawChartsNow(data));
 }
 
 async function loadDashboard(forceRefresh = false) {
@@ -495,7 +520,6 @@ function openEmployeeModal(empId = null) {
   form.reset();
   document.getElementById('formEmpId').value = '';
 
-  // Ensure department dropdown inside modal has options
   const dash = state.dashboardCache.get(state.deptId) || state.dashboardCache.values().next().value;
   if (dash && dash.units) {
     populateDepartmentDropdowns(dash.units, state.deptId);
@@ -688,11 +712,16 @@ window.applySwUpdate = applySwUpdate;
 
 window.addEventListener('online', updateConnectionStatus);
 window.addEventListener('offline', updateConnectionStatus);
+window.addEventListener('resize', () => {
+  const current = state.dashboardCache.get(state.deptId);
+  if (current) renderAllCharts(current);
+});
 
 document.addEventListener('DOMContentLoaded', () => {
   updateConnectionStatus();
   checkIosInstallBanner();
   registerServiceWorker();
+  ensureGoogleChartsReady();
   switchTab('overview');
   loadDashboard(false);
 });
