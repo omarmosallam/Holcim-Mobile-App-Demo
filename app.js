@@ -3,7 +3,7 @@
  * Connects to Google Apps Script Web App (/exec) via JSON POST bridge.
  */
 
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec'; // Replace with https://script.google.com/macros/s/.../exec
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzZidsn99APmSvvmVLTe8isT4uI35ljHUhEUgtUUYrZDu888aTxyzgQ0yvqbg2cNr6icQ/exec';
 const PAGE_SIZE = 10;
 
 const state = {
@@ -103,6 +103,11 @@ function setLoading(isLoading) {
   });
 }
 
+function setTextIfExists(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
 function formatNumber(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
@@ -124,22 +129,52 @@ function invalidateClientCaches() {
 
 // -------------------- Navigation & Filter Events --------------------
 
+function normalizeTabName(raw) {
+  const clean = String(raw || 'overview').toLowerCase().trim();
+  if (clean.includes('employee')) return 'employees';
+  if (clean.includes('analytic')) return 'analytics';
+  if (clean.includes('activity')) return 'activity';
+  return 'overview';
+}
+
 function switchTab(tabName) {
-  state.activeTab = tabName || 'overview';
+  const target = normalizeTabName(tabName);
+  state.activeTab = target;
 
-  document.querySelectorAll('[data-tab-section]').forEach(el => {
-    el.style.display = el.getAttribute('data-tab-section') === state.activeTab ? '' : 'none';
-  });
+  const sections = document.querySelectorAll('[data-tab-section]');
+  if (sections.length > 0) {
+    sections.forEach(el => {
+      const secName = normalizeTabName(el.getAttribute('data-tab-section'));
+      const match = secName === target;
+      el.classList.toggle('hidden', !match);
+      el.style.display = match ? '' : 'none';
+    });
+  } else {
+    ['overview', 'employees', 'analytics', 'activity'].forEach(name => {
+      const sec =
+        document.getElementById(`${name}Section`) ||
+        document.getElementById(`section-${name}`) ||
+        document.getElementById(`tab-${name}`);
+      if (sec) {
+        const match = name === target;
+        sec.classList.toggle('hidden', !match);
+        sec.style.display = match ? '' : 'none';
+      }
+    });
+  }
 
-  document.querySelectorAll('[data-nav-tab]').forEach(btn => {
-    const isActive = btn.getAttribute('data-nav-tab') === state.activeTab;
+  const navButtons = document.querySelectorAll('[data-nav-tab], .nav-item');
+  navButtons.forEach(btn => {
+    const attrTab = btn.getAttribute('data-nav-tab');
+    const inferred = normalizeTabName(attrTab || btn.textContent);
+    const isActive = inferred === target;
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-current', isActive ? 'page' : 'false');
   });
 
-  if (state.activeTab === 'employees') {
+  if (target === 'employees') {
     loadEmployeesPage(state.empPage);
-  } else if (state.activeTab === 'activity') {
+  } else if (target === 'activity') {
     loadRecentActivity();
   }
 }
@@ -176,7 +211,6 @@ function populateUnitSelects(units, selectedUnitId) {
 function applyDashboardData(data, selectedUnit) {
   showErrorBanner('');
 
-  // If dbVersion changed on backend, clear stale employee/activity caches
   if (data.dbVersion && data.dbVersion !== state.empListVersion) {
     state.empListCache = null;
     state.empListVersion = data.dbVersion;
@@ -198,25 +232,17 @@ function applyDashboardData(data, selectedUnit) {
 }
 
 function renderKpis(kpis = {}) {
-  const map = {
-    kpiTotalEmployees: formatNumber(kpis.headcount),
-    kpiDepartments: formatNumber(5),
-    kpiMonthlyPayroll: formatNumber(kpis.monthlyPayrollEgp),
-    kpiAvgScore: `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`,
-    kpiDispatchedTons: `${formatNumber(kpis.totalDispatchedTons)} t`,
-    kpiRevenueEgp: formatCompactEgp(kpis.totalRevenueEgp),
-    kpiCo2Intensity: `${formatNumber(kpis.avgCo2)} kg/t`,
-    kpiCapexProgress: `${formatNumber(kpis.avgProjectProgress)}%`
-  };
-
-  Object.entries(map).forEach(([id, val]) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = val;
-  });
+  setTextIfExists('kpiTotalEmployees', formatNumber(kpis.headcount));
+  setTextIfExists('kpiDepartments', formatNumber(5));
+  setTextIfExists('kpiMonthlyPayroll', formatNumber(kpis.monthlyPayrollEgp));
+  setTextIfExists('kpiAvgScore', `${Number(kpis.avgPerformance || 0).toFixed(2)} / 5.0`);
+  setTextIfExists('kpiDispatchedTons', `${formatNumber(kpis.totalDispatchedTons)} t`);
+  setTextIfExists('kpiRevenueEgp', formatCompactEgp(kpis.totalRevenueEgp));
+  setTextIfExists('kpiCo2Intensity', `${formatNumber(kpis.avgCo2)} kg/t`);
+  setTextIfExists('kpiCapexProgress', `${formatNumber(kpis.avgProjectProgress)}%`);
 }
 
 function renderCharts(charts = {}) {
-  // Lightweight canvas bar chart renderer if a #headcountChart canvas exists
   const canvas = document.getElementById('headcountChart');
   if (!canvas || !canvas.getContext) return;
   const rows = (charts.capexByUnitChart || []).slice(1);
@@ -266,7 +292,6 @@ function renderSummaryTables(data) {
 async function loadDashboard(forceRefresh = false) {
   const selectedUnit = state.unitId || 'ALL';
 
-  // Instant render from client memory when no force refresh is requested
   if (!forceRefresh && state.dashboardCache.has(selectedUnit)) {
     applyDashboardData(state.dashboardCache.get(selectedUnit), selectedUnit);
     if (state.activeTab === 'employees') {
@@ -390,7 +415,6 @@ async function loadEmployeesPage(page = 1, forceRefresh = false) {
   state.empPage = Math.max(1, Number(page || 1));
   showErrorBanner('');
 
-  // Fast instant client-side filtering/sorting/pagination if full list is already cached
   if (!forceRefresh && Array.isArray(state.empListCache)) {
     renderEmployeesPage(filterAndPaginateLocalEmployees(state.empListCache));
     return;
@@ -438,6 +462,7 @@ async function handleAddEmployee(payload) {
     const msg = await callGasApi('addEmployee', payload);
     invalidateClientCaches();
     showToast(typeof msg === 'string' ? msg : 'Employee added.');
+    window.closeEmployeeModal();
     await loadDashboard(true);
     await loadEmployeesPage(1, true);
   } catch (err) {
@@ -469,6 +494,7 @@ function openEditEmployeeModal(empId) {
   setVal('editSafetyCert', emp.safety_certified || 'Yes');
   setVal('editPerfScore', emp.performance_score ?? 4.5);
   setVal('editStatus', emp.status || 'Active');
+  modal.classList.remove('hidden');
   modal.style.display = 'flex';
 }
 
@@ -478,8 +504,7 @@ async function handleUpdateEmployee(payload) {
     const msg = await callGasApi('updateEmployee', payload);
     invalidateClientCaches();
     showToast(typeof msg === 'string' ? msg : 'Employee updated.');
-    const modal = document.getElementById('editEmployeeModal');
-    if (modal) modal.style.display = 'none';
+    window.closeEmployeeModal();
     await loadDashboard(true);
     await loadEmployeesPage(state.empPage, true);
   } catch (err) {
@@ -537,18 +562,70 @@ async function loadRecentActivity(forceRefresh = false) {
   }
 }
 
+// -------------------- Global Window Exports for HTML onclick Handlers --------------------
+
+window.refreshAll = function refreshAll() {
+  invalidateClientCaches();
+  return loadDashboard(true);
+};
+
+window.openEmployeeModal = function openEmployeeModal(empId = null) {
+  if (empId) {
+    return openEditEmployeeModal(empId);
+  }
+  const addModal =
+    document.getElementById('addEmployeeModal') ||
+    document.getElementById('employeeModal');
+  if (addModal) {
+    const form = addModal.querySelector('form');
+    if (form) form.reset();
+    addModal.classList.remove('hidden');
+    addModal.style.display = 'flex';
+    return;
+  }
+  const inlineForm = document.getElementById('addEmployeeForm');
+  if (inlineForm) {
+    switchTab('employees');
+    inlineForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const firstInput = inlineForm.querySelector('input, select');
+    if (firstInput) firstInput.focus();
+  } else {
+    showToast('Add Employee modal not found in index.html.', true);
+  }
+};
+
+window.closeEmployeeModal = function closeEmployeeModal() {
+  ['addEmployeeModal', 'editEmployeeModal', 'employeeModal'].forEach(id => {
+    const modal = document.getElementById(id);
+    if (modal) {
+      modal.classList.add('hidden');
+      modal.style.display = 'none';
+    }
+  });
+};
+
+window.switchTab = switchTab;
+window.loadDashboard = loadDashboard;
+window.loadEmployeesPage = loadEmployeesPage;
+window.loadRecentActivity = loadRecentActivity;
+window.openEditEmployeeModal = openEditEmployeeModal;
+window.handleDeleteEmployee = handleDeleteEmployee;
+
 // -------------------- Initialization --------------------
 
 function bindEvents() {
-  document.querySelectorAll('[data-nav-tab]').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.getAttribute('data-nav-tab')));
+  document.querySelectorAll('[data-nav-tab], .nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const explicitTab = btn.getAttribute('data-nav-tab');
+      switchTab(explicitTab || btn.textContent);
+    });
   });
 
   document.querySelectorAll('#unitFilter, #deptFilter').forEach(select => {
     select.addEventListener('change', e => {
       state.unitId = e.target.value || 'ALL';
       state.empPage = 1;
-      loadDashboard(false); // Uses cached data if already viewed; fetches once if new unit
+      loadDashboard(false);
     });
   });
 
