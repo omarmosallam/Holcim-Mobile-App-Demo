@@ -54,6 +54,11 @@ const state = {
   swRegistration: null
 };
 
+const fixDraft = {
+  photoDataUrl: null,
+  photoMeta: ''
+};
+
 const TAB_TITLES = {
   overview: 'Dashboard Overview',
   employees: 'Employee Directory',
@@ -692,10 +697,10 @@ function buildAlertsList() {
     alerts.push({
       id: s.incident_id,
       type: 'HSE',
-      badge: s.category || 'HSE Log',
+      badge: s.category || 'Support / HSE',
       badgeClass: 'badge-info',
       title: s.notes || `${s.category} (${s.severity})`,
-      detail: `${s.unit_name || s.unit_id} • Severity: ${s.severity || 'Low'}`,
+      detail: `${s.unit_name || s.unit_id} • Priority: ${s.severity || 'Medium'}`,
       time: s.date || ''
     });
   });
@@ -1140,6 +1145,192 @@ async function handleSaveProduction(event) {
   }
 }
 
+// -------------------- Employee Support & Fix Request Modal --------------------
+
+function handleFixCategoryChange() {
+  const cat = document.getElementById('fixCategory')?.value || 'Factory / Equipment Fix';
+  const eqInput = document.getElementById('fixEquipment');
+  const descInput = document.getElementById('fixDescription');
+  const statusEl = document.getElementById('fixPhotoStatus');
+
+  if (!eqInput || !descInput) return;
+
+  if (cat.startsWith('IT & Laptop')) {
+    eqInput.placeholder = 'e.g., Dell Latitude laptop, VPN client, or Outlook / Teams';
+    descInput.placeholder = 'e.g., Blue screen, battery draining fast, Wi-Fi/VPN won\'t connect...';
+    if (statusEl && !fixDraft.photoDataUrl) {
+      statusEl.textContent = 'Optional: attach a photo of an error screen or pick a screenshot from gallery.';
+    }
+  } else {
+    eqInput.placeholder = 'e.g., Cooler Fan #2 grating or Kiln belt roller';
+    descInput.placeholder = 'Describe the laptop error, noise, network drop, or fault...';
+    if (statusEl && !fixDraft.photoDataUrl) {
+      statusEl.textContent = 'Optional: capture a photo on mobile or upload a laptop error screenshot.';
+    }
+  }
+}
+
+function openFixRequestModal() {
+  const modal = document.getElementById('fixRequestModal');
+  const form = document.getElementById('fixRequestForm');
+  const selectEl = document.getElementById('fixUnitId');
+  if (!modal || !form) return;
+
+  form.reset();
+  clearFixPhoto();
+  handleFixCategoryChange();
+
+  if (selectEl) {
+    const dash = state.dashboardCache.get(state.deptId) || state.dashboardCache.values().next().value;
+    const units = (dash && dash.units) || [];
+    selectEl.innerHTML = '';
+    units.forEach(u => {
+      const opt = document.createElement('option');
+      opt.value = u.unit_id;
+      opt.textContent = u.unit_name;
+      selectEl.appendChild(opt);
+    });
+    if (state.deptId && state.deptId !== 'ALL' && units.some(u => u.unit_id === state.deptId)) {
+      selectEl.value = state.deptId;
+    }
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeFixRequestModal() {
+  const modal = document.getElementById('fixRequestModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function clearFixPhoto() {
+  fixDraft.photoDataUrl = null;
+  fixDraft.photoMeta = '';
+  const input = document.getElementById('fixPhotoInput');
+  const wrap = document.getElementById('fixPhotoPreviewWrap');
+  const img = document.getElementById('fixPhotoPreview');
+  const status = document.getElementById('fixPhotoStatus');
+  if (input) input.value = '';
+  if (img) img.removeAttribute('src');
+  if (wrap) wrap.classList.add('hidden');
+  if (status) status.textContent = 'Optional: capture a photo on mobile or upload a laptop error screenshot.';
+}
+
+function compressImageToDataUrl(file, maxWidth = 1024, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read the selected image file.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Unsupported or corrupted image format.'));
+      img.onload = () => {
+        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas compression is unavailable on this device.'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressedUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve({ compressedUrl, width, height });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handlePhotoFileChange(event) {
+  const file = event && event.target && event.target.files && event.target.files[0];
+  const status = document.getElementById('fixPhotoStatus');
+  const wrap = document.getElementById('fixPhotoPreviewWrap');
+  const img = document.getElementById('fixPhotoPreview');
+
+  if (!file) {
+    clearFixPhoto();
+    return;
+  }
+
+  if (!file.type.startsWith('image/')) {
+    clearFixPhoto();
+    showAlert('Please choose a valid photo or image file.', true);
+    return;
+  }
+
+  if (status) status.textContent = 'Compressing photo for mobile upload...';
+
+  try {
+    const { compressedUrl, width, height } = await compressImageToDataUrl(file, 1024, 0.72);
+    if (compressedUrl.length > 45000) {
+      const smaller = await compressImageToDataUrl(file, 720, 0.58);
+      fixDraft.photoDataUrl = smaller.compressedUrl;
+      fixDraft.photoMeta = `${smaller.width}x${smaller.height} compressed JPEG`;
+    } else {
+      fixDraft.photoDataUrl = compressedUrl;
+      fixDraft.photoMeta = `${width}x${height} compressed JPEG`;
+    }
+
+    if (img) img.src = fixDraft.photoDataUrl;
+    if (wrap) wrap.classList.remove('hidden');
+    if (status) status.textContent = `Photo ready (${fixDraft.photoMeta}).`;
+  } catch (err) {
+    clearFixPhoto();
+    showAlert(err.message || 'Failed to process photo. Try another image or submit without photo.', true);
+  }
+}
+
+async function handleSubmitFixRequest(event) {
+  event.preventDefault();
+  const btn = document.getElementById('saveFixBtn');
+  if (btn) btn.disabled = true;
+  setLoading(true);
+
+  const category = document.getElementById('fixCategory')?.value || 'Factory / Equipment Fix';
+  const unitId = document.getElementById('fixUnitId').value;
+  const equipment = document.getElementById('fixEquipment').value.trim();
+  const severity = document.getElementById('fixSeverity').value;
+  const reporter = document.getElementById('fixReporter').value.trim() || 'Employee';
+  const description = document.getElementById('fixDescription').value.trim();
+
+  const payload = {
+    category,
+    unit_id: unitId,
+    equipment,
+    severity,
+    reporter,
+    description,
+    has_photo: Boolean(fixDraft.photoDataUrl),
+    photo_meta: fixDraft.photoMeta,
+    photo_data_url: fixDraft.photoDataUrl || ''
+  };
+
+  try {
+    const msg = await callGasApi('logFixRequest', payload);
+    closeFixRequestModal();
+    invalidateClientCaches();
+    showAlert(typeof msg === 'string' ? msg : 'Support request submitted.', false);
+    await loadDashboard(true);
+    if (state.activeTab === 'activity') {
+      renderNotificationCenter();
+      await loadRecentActivity(true);
+    }
+  } catch (err) {
+    showAlert(
+      (err && err.message) || 'Could not send support request. Check connection and try again.',
+      true
+    );
+  } finally {
+    if (btn) btn.disabled = false;
+    setLoading(false);
+  }
+}
+
 // -------------------- Activity Log --------------------
 
 function renderActivityFeed(logs = []) {
@@ -1247,6 +1438,12 @@ window.deleteEmployeeRecord = deleteEmployeeRecord;
 window.openProductionModal = openProductionModal;
 window.closeProductionModal = closeProductionModal;
 window.handleSaveProduction = handleSaveProduction;
+window.handleFixCategoryChange = handleFixCategoryChange;
+window.openFixRequestModal = openFixRequestModal;
+window.closeFixRequestModal = closeFixRequestModal;
+window.handlePhotoFileChange = handlePhotoFileChange;
+window.clearFixPhoto = clearFixPhoto;
+window.handleSubmitFixRequest = handleSubmitFixRequest;
 window.handleFilterChange = handleFilterChange;
 window.debouncedSearch = debouncedSearch;
 window.loadEmployeesPage = loadEmployeesPage;

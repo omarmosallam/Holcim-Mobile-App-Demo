@@ -35,20 +35,21 @@
       </div>
 
       <nav class="sidebar-nav">
-        <button class="nav-btn active" data-tab="overview" onclick="switchTab('overview')">📊 Overview &amp; Tasks</button>
-        <button class="nav-btn" data-tab="employees" onclick="switchTab('employees')">👥 Employees</button>
-        <button class="nav-btn" data-tab="analytics" onclick="switchTab('analytics')">📈 Analytics &amp; Timeline</button>
-        <button class="nav-btn" data-tab="activity" onclick="switchTab('activity')">
-          🔔 Alerts &amp; Activity
+        <button type="button" class="nav-btn active" data-tab="overview" onclick="switchTab('overview')">📊 Overview &amp; Tasks</button>
+        <button type="button" class="nav-btn" data-tab="employees" onclick="switchTab('employees')">👥 Employees</button>
+        <button type="button" class="nav-btn" data-tab="analytics" onclick="switchTab('analytics')">📈 Analytics &amp; Timeline</button>
+        <button type="button" class="nav-btn" data-tab="activity" onclick="switchTab('activity')">
+          <span>🔔 Alerts &amp; Activity</span>
           <span id="sidebarAlertBadge" class="nav-badge">0</span>
         </button>
       </nav>
 
       <div class="sidebar-footer">
-        <button id="installBtnDesktop" class="btn-install hidden" onclick="triggerInstallPrompt()">📲 Install App</button>
-        <button class="btn-outline-light" onclick="openProductionModal()">⚡ Log Shift</button>
-        <button class="btn-outline-light" onclick="copyExecutiveSummary()">📋 Copy KPI Digest</button>
-        <button class="btn-outline-light" onclick="refreshAll(true)">↻ Refresh Live Data</button>
+        <button type="button" id="installBtnDesktop" class="btn-install hidden" onclick="triggerInstallPrompt()">📲 Install App</button>
+        <button type="button" class="btn-outline-light" onclick="openFixRequestModal()">🎫 Support / Fix</button>
+        <button type="button" class="btn-outline-light" onclick="openProductionModal()">⚡ Log Shift</button>
+        <button type="button" class="btn-outline-light" onclick="copyExecutiveSummary()">📋 Copy KPI Digest</button>
+        <button type="button" class="btn-outline-light" onclick="refreshAll(true)">↻ Refresh Live Data</button>
       </div>
     </aside>
 
@@ -64,7 +65,8 @@
           </div>
         </div>
         <div class="header-actions">
-          <button id="installBtnMobile" class="btn-install-sm hidden" onclick="triggerInstallPrompt()">📲 Install</button>
+          <button type="button" id="installBtnMobile" class="btn-install-sm hidden" onclick="triggerInstallPrompt()">📲 Install</button>
+          <button type="button" class="btn-secondary" onclick="openFixRequestModal()">🎫 Support</button>
           <button type="button" class="btn-secondary" onclick="openProductionModal()">⚡ Log Shift</button>
           <button type="button" class="btn-icon" title="Copy Executive Summary" aria-label="Copy Summary" onclick="copyExecutiveSummary()">📋</button>
           <button type="button" class="btn-icon" title="Refresh Live Data" aria-label="Refresh" onclick="refreshAll(true)">↻</button>
@@ -274,7 +276,6 @@
           </div>
         </div>
 
-        <!-- GANTT / TIMELINE BAR VIEW FOR INITIATIVES -->
         <div class="card" style="margin-bottom: 16px;">
           <div class="card-header-flex">
             <div>
@@ -431,6 +432,71 @@
         <div class="modal-footer">
           <button type="button" class="btn-secondary" onclick="closeProductionModal()">Cancel</button>
           <button type="submit" id="saveProdBtn" class="btn-primary">Submit Log</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- EMPLOYEE SUPPORT & FIX REQUEST MODAL (FACTORY + HEAD OFFICE IT) -->
+  <div id="fixRequestModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="fixModalTitle">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h3 id="fixModalTitle">Submit Support / Fix Request</h3>
+        <button type="button" class="btn-close" onclick="closeFixRequestModal()" aria-label="Close">✕</button>
+      </div>
+
+      <form id="fixRequestForm" onsubmit="handleSubmitFixRequest(event)">
+        <label for="fixCategory">Request Type</label>
+        <select id="fixCategory" required onchange="handleFixCategoryChange()">
+          <option value="Factory / Equipment Fix">Factory / Equipment Fix</option>
+          <option value="IT &amp; Laptop Support">IT &amp; Laptop Support (Head Office / Remote)</option>
+          <option value="Safety / HSE">Safety / HSE Observation</option>
+          <option value="Facility &amp; Office">Facility &amp; Office Request</option>
+        </select>
+
+        <label for="fixUnitId">Plant / Office Division</label>
+        <select id="fixUnitId" required></select>
+
+        <label id="fixEquipmentLabel" for="fixEquipment">Equipment / Asset / Issue Title</label>
+        <input type="text" id="fixEquipment" required placeholder="e.g., Cooler Fan #2 grating or Work laptop won't charge">
+
+        <div class="form-grid-2">
+          <div>
+            <label for="fixSeverity">Priority / Severity</label>
+            <select id="fixSeverity">
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+              <option value="High">High (Urgent / Blocker)</option>
+            </select>
+          </div>
+          <div>
+            <label for="fixReporter">Employee Name / Role</label>
+            <input type="text" id="fixReporter" placeholder="e.g., Sara Ahmed — Finance HQ">
+          </div>
+        </div>
+
+        <label for="fixDescription">Problem Details</label>
+        <input type="text" id="fixDescription" required placeholder="Describe the laptop error, noise, network drop, or fault...">
+
+        <label for="fixPhotoInput">Photo or Error Screenshot (Camera or Gallery)</label>
+        <div class="photo-capture-box">
+          <input
+            type="file"
+            id="fixPhotoInput"
+            accept="image/*"
+            capture="environment"
+            onchange="handlePhotoFileChange(event)"
+          >
+          <div id="fixPhotoStatus" class="photo-hint">Optional: capture a photo on mobile or upload a laptop error screenshot.</div>
+          <div id="fixPhotoPreviewWrap" class="photo-preview-wrap hidden">
+            <img id="fixPhotoPreview" alt="Attached support preview" class="photo-preview-img">
+            <button type="button" class="btn-chip-del" onclick="clearFixPhoto()">Remove Photo</button>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary" onclick="closeFixRequestModal()">Cancel</button>
+          <button type="submit" id="saveFixBtn" class="btn-primary">Send Request</button>
         </div>
       </form>
     </div>

@@ -432,7 +432,8 @@ button:focus-visible {
 select,
 input[type="text"],
 input[type="number"],
-input[type="search"] {
+input[type="search"],
+input[type="file"] {
   min-height: 42px;
   padding: 9px 12px;
   border-radius: 10px;
@@ -981,7 +982,7 @@ input[type="search"] {
   margin-top: 3px;
 }
 
-/* ================= MODAL ================= */
+/* ================= MODAL & PHOTO CAPTURE ================= */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -999,6 +1000,8 @@ input[type="search"] {
   padding: 20px;
   width: 440px;
   max-width: 100%;
+  max-height: 92vh;
+  overflow-y: auto;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.22);
 }
 
@@ -1028,6 +1031,36 @@ input[type="search"] {
 .modal-sheet input,
 .modal-sheet select {
   width: 100%;
+}
+
+.photo-capture-box {
+  background: #f8fafc;
+  border: 1px dashed #94a3b8;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 4px;
+}
+
+.photo-hint {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 6px;
+}
+
+.photo-preview-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.photo-preview-img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
 }
 
 .form-grid-2 {
@@ -1099,13 +1132,13 @@ input[type="search"] {
   }
 
   .header-actions {
-    gap: 6px;
+    gap: 5px;
     flex-shrink: 0;
   }
 
   .app-header .btn-secondary {
     min-height: 34px;
-    padding: 6px 9px;
+    padding: 6px 8px;
     font-size: 11px;
     border-radius: 8px;
   }
@@ -1123,14 +1156,14 @@ input[type="search"] {
 
   .app-header .btn-primary {
     min-height: 34px;
-    padding: 6px 11px;
+    padding: 6px 10px;
     font-size: 12px;
     border-radius: 8px;
   }
 
   .btn-install-sm {
     min-height: 34px;
-    padding: 5px 9px;
+    padding: 5px 8px;
     font-size: 11px;
   }
 
@@ -1209,7 +1242,8 @@ input[type="search"] {
   select,
   input[type="text"],
   input[type="number"],
-  input[type="search"] {
+  input[type="search"],
+  input[type="file"] {
     font-size: 16px;
   }
 
